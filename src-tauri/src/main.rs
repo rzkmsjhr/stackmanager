@@ -3,19 +3,20 @@
     windows_subsystem = "windows"
 )]
 
-// 1. Import the module we just created
 mod process_manager;
+mod filesystem;
 
 use process_manager::{start_service, stop_service, ServiceState};
+use filesystem::{init_environment, get_services};
 
 fn main() {
     tauri::Builder::default()
-        // 2. Initialize the shared state
         .manage(ServiceState::new())
-        // 3. Register the commands so Frontend can call them
         .invoke_handler(tauri::generate_handler![
             start_service, 
-            stop_service
+            stop_service,
+            init_environment,
+            get_services 
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

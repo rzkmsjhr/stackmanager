@@ -1,10 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react'; // <--- Add useEffect
 import { 
   Play, Square, Trash2, Info, 
   Globe, Folder, Activity, Settings, 
   PlusCircle, CheckCircle, XCircle, Terminal
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core'; // <--- Import invoke
 import { ServiceAPI } from './api/serviceControl';
+
+// ... (Keep your existing Types and Mock Data here) ...
+// ... (Keep FrameworkIcon and StatusIndicator components here) ...
 
 // --- Types ---
 type ServiceStatus = 'running' | 'stopped' | 'error' | 'starting';
@@ -73,11 +77,27 @@ export default function App() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
-  // --- Integration Logic ---
+  // --- NEW: Run Environment Setup on Start ---
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const msg = await invoke('init_environment');
+        console.log("Setup Success:", msg);
+        
+        const services = await invoke('get_services');
+        console.log("Installed Services:", services);
+      } catch (error) {
+        console.error("Setup Failed:", error);
+      }
+    };
+    init();
+  }, []);
+  // -------------------------------------------
+
+  // ... (Keep toggleProjectService function) ...
   const toggleProjectService = async (project: Project) => {
     const newStatus = project.status === 'running' ? 'stopped' : 'running';
     
-    // 1. Optimistic Update
     setProjects(prev => prev.map(p => 
       p.id === project.id ? { ...p, status: newStatus === 'running' ? 'starting' : 'stopped' } : p
     ));
@@ -87,26 +107,12 @@ export default function App() {
 
       if (newStatus === 'running') {
         console.log("Calling Rust to start service...");
-        
-        // NOTE: binPath must be a real file to work. 
-        // For testing, we simulate a delay.
-        /*
-        await ServiceAPI.start({
-           id: backendId,
-           binPath: "C:/Windows/System32/notepad.exe", 
-           args: []
-        });
-        */
-        
         setTimeout(() => {
            setProjects(prev => prev.map(p => 
              p.id === project.id ? { ...p, status: 'running' } : p
            ));
         }, 1000);
-        
       } else {
-        // await ServiceAPI.stop(backendId);
-        
         setProjects(prev => prev.map(p => 
           p.id === project.id ? { ...p, status: 'stopped' } : p
         ));
@@ -119,6 +125,7 @@ export default function App() {
     }
   };
 
+  // ... (Keep openDetails function) ...
   const openDetails = (project: Project) => {
     setSelectedProject(project);
     setIsDetailsOpen(true);
@@ -239,7 +246,9 @@ export default function App() {
             <div className="p-6">
               <div className="p-4 bg-slate-100 rounded-lg text-sm text-slate-600 mb-4">
                 <strong>Debug Info:</strong><br/>
-                Rust Backend is connected. Check console logs when you toggle the "Run" button.
+                Check the Browser Console (F12).<br/>
+                You should see "Setup Success: Environment initialized".<br/>
+                Also check your user folder for `.stackmanager`.
               </div>
               <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
                   <span className="text-sm font-medium text-slate-700">PHP Version</span>
