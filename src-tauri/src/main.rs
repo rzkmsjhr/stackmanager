@@ -5,9 +5,18 @@
 
 mod process_manager;
 mod filesystem;
+mod downloader;
+mod shim;
 
 use process_manager::{start_service, stop_service, ServiceState};
 use filesystem::{init_environment, get_services};
+use downloader::download_service;
+use shim::set_active_version;
+
+#[tauri::command]
+fn open_in_browser(url: String) {
+    let _ = open::that(url);
+}
 
 fn main() {
     tauri::Builder::default()
@@ -16,7 +25,10 @@ fn main() {
             start_service, 
             stop_service,
             init_environment,
-            get_services 
+            get_services,
+            download_service,
+            set_active_version,
+            open_in_browser // <--- Register it here
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
