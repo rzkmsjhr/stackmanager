@@ -7,6 +7,7 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { ServiceAPI } from './api/serviceControl';
 import { Database } from 'lucide-react'; // Import Database Icon
+import { open } from '@tauri-apps/plugin-dialog';
 
 // --- Types ---
 type ServiceStatus = 'running' | 'stopped' | 'error' | 'starting';
@@ -106,18 +107,34 @@ export default function App() {
   };
 
   // --- NEW: Add Project Function ---
-  const addNewProject = () => {
-    const newProj: Project = {
-      id: crypto.randomUUID(),
-      name: 'New Project ' + (projects.length + 1),
-      path: 'C:/stack-test', // Default path
-      framework: 'custom',
-      domain: 'localhost',
-      port: 8000 + projects.length + 1, // Auto-increment port
-      status: 'stopped',
-      phpVersion: '8.2'
-    };
-    updateAndSave([...projects, newProj]);
+  const addNewProject = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select Project Folder"
+      });
+
+      if (selected && typeof selected === 'string') {
+        // Extract folder name from path for the project name
+        // e.g. "C:/Users/Dev/my-app" -> "my-app"
+        const name = selected.split(/[\\/]/).pop() || "Untitled Project";
+
+        const newProj: Project = {
+          id: crypto.randomUUID(),
+          name: name,
+          path: selected, // Use real path
+          framework: 'custom', // You could auto-detect this later by checking files!
+          domain: 'localhost',
+          port: 8000 + projects.length + 1,
+          status: 'stopped',
+          phpVersion: '8.2'
+        };
+        updateAndSave([...projects, newProj]);
+      }
+    } catch (err) {
+      console.error("Failed to pick folder:", err);
+    }
   };
 
   // Add this State for MySQL

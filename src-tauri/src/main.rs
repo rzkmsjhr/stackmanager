@@ -24,6 +24,7 @@ fn open_in_browser(url: String) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(ServiceState::new())
         .invoke_handler(tauri::generate_handler![
             start_service, 
