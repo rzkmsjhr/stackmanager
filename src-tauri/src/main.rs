@@ -9,6 +9,7 @@ mod downloader;
 mod shim;
 mod store;
 mod database;
+mod composer;
 
 use process_manager::{start_service, stop_service, ServiceState};
 use filesystem::{init_environment, get_services};
@@ -16,6 +17,7 @@ use downloader::download_service;
 use shim::set_active_version;
 use store::{save_projects, load_projects};
 use database::init_mysql;
+use composer::{init_composer, create_laravel_project};
 
 #[tauri::command]
 fn open_in_browser(url: String) {
@@ -36,7 +38,9 @@ fn main() {
             open_in_browser,
             save_projects,
             load_projects,
-            init_mysql
+            init_mysql,
+            init_composer,
+            create_laravel_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,12 +2,12 @@ import React, { useState, useEffect } from 'react';
 import {
   Play, Square, Trash2, Info,
   Globe, Folder, Activity, Settings,
-  PlusCircle, CheckCircle, XCircle, Terminal
+  PlusCircle, CheckCircle, XCircle, Terminal, Database
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ServiceAPI } from './api/serviceControl';
-import { Database } from 'lucide-react'; // Import Database Icon
 import { open } from '@tauri-apps/plugin-dialog';
+import { listen } from '@tauri-apps/api/event';
 
 // --- Types ---
 type ServiceStatus = 'running' | 'stopped' | 'error' | 'starting';
@@ -18,24 +18,10 @@ interface Project {
   path: string;
   framework: 'laravel' | 'symfony' | 'wordpress' | 'custom';
   domain: string;
-  port: number; // Added Port
+  port: number;
   status: ServiceStatus;
   phpVersion: string;
 }
-
-// --- REAL DATA FOR TESTING ---
-const initialProjects: Project[] = [
-  {
-    id: 'test-1',
-    name: 'My Test Project',
-    path: 'D:/stack-test', // <--- MAKE SURE THIS FOLDER EXISTS
-    framework: 'custom',
-    domain: 'localhost',
-    port: 8000,
-    status: 'stopped',
-    phpVersion: '8.2 (Global)',
-  }
-];
 
 const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
   switch (status) {
@@ -46,41 +32,27 @@ const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
   }
 };
 
-export default function App() {
-  // 1. Start with EMPTY projects
-  const [projects, setProjects] = useState<Project[]>([]);
 
-  // --- Helper to Save to Disk ---
+export default function App() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [mysqlStatus, setMysqlStatus] = useState<ServiceStatus>('stopped');
+
+  const [composerLogs, setComposerLogs] = useState<string[]>([]);
+  const [isInstalling, setIsInstalling] = useState(false);
+
   const updateAndSave = async (newProjects: Project[]) => {
     setProjects(newProjects);
-    // Convert to JSON string and send to Rust
     await invoke('save_projects', { data: JSON.stringify(newProjects) });
   };
 
-  // --- Load on Start ---
   useEffect(() => {
     const init = async () => {
       try {
         await invoke('init_environment');
-
-        // LOAD PROJECTS FROM DISK
         const json = await invoke<string>('load_projects');
         const savedProjects = JSON.parse(json);
         if (savedProjects.length > 0) {
           setProjects(savedProjects);
-        } else {
-          // If empty, maybe add a default one for guidance?
-          const defaultProj: Project = {
-            id: 'demo-1',
-            name: 'My First Project',
-            path: 'D:/stack-test',
-            framework: 'custom',
-            domain: 'localhost',
-            port: 8000,
-            status: 'stopped',
-            phpVersion: '8.2',
-          };
-          updateAndSave([defaultProj]);
         }
       } catch (error) {
         console.error("Init Failed:", error);
@@ -89,60 +61,43 @@ export default function App() {
     init();
   }, []);
 
-  // --- Updated Toggle Function (Uses updateAndSave) ---
   const toggleProjectService = async (project: Project) => {
     const backendId = `proj_${project.id}`;
     const newStatus = project.status === 'running' ? 'stopped' : 'running';
-
-    // Update State & Save
     const updatedList = projects.map(p =>
       p.id === project.id ? { ...p, status: newStatus === 'running' ? 'starting' : 'stopped' } : p
     );
-    // Note: We don't necessarily need to save "status" to disk (it should probably start as stopped), 
-    // but for now, saving everything is fine.
     setProjects(updatedList);
 
-    // ... (Keep the rest of the PHP start/stop logic exactly the same) ...
-    // ... just ensure you use 'setProjects' correctly ...
-  };
-
-  // --- NEW: Add Project Function ---
-  const addNewProject = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "Select Project Folder"
-      });
+      if (newStatus === 'running') {
+        console.log(`Starting PHP Server on port ${project.port}...`);
+        // NOTE: For PHP built-in server, use a high port. 
+        // IMPORTANT: Ensure the binPath is correct for your machine or fetched dynamically
+        const phpPath = `C:/Users/${import.meta.env.VITE_USERNAME || 'MadeIndonesia'}/.stackmanager/bin/php/php.exe`;
 
-      if (selected && typeof selected === 'string') {
-        // Extract folder name from path for the project name
-        // e.g. "C:/Users/Dev/my-app" -> "my-app"
-        const name = selected.split(/[\\/]/).pop() || "Untitled Project";
+        await ServiceAPI.start({
+          id: backendId,
+          binPath: phpPath,
+          args: ["-S", `127.0.0.1:${project.port}`, "-t", project.framework === 'laravel' ? `${project.path}/public` : project.path]
+        });
 
-        const newProj: Project = {
-          id: crypto.randomUUID(),
-          name: name,
-          path: selected, // Use real path
-          framework: 'custom', // You could auto-detect this later by checking files!
-          domain: 'localhost',
-          port: 8000 + projects.length + 1,
-          status: 'stopped',
-          phpVersion: '8.2'
-        };
-        updateAndSave([...projects, newProj]);
+        setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'running' } : p));
+
+      } else {
+        await ServiceAPI.stop(backendId);
+        setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'stopped' } : p));
       }
     } catch (err) {
-      console.error("Failed to pick folder:", err);
+      console.error("Failed:", err);
+      alert("Error: " + err);
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'error' } : p));
     }
   };
 
-  // Add this State for MySQL
-  const [mysqlStatus, setMysqlStatus] = useState<ServiceStatus>('stopped');
-
-  // Function to handle MySQL Logic
+  // --- MySQL Logic ---
   const toggleMySQL = async () => {
-    const folderName = "mariadb-10.11.6-winx64"; // We will download this specific version
+    const folderName = "mariadb-10.11.6-winx64";
     const serviceId = "global_mysql";
 
     if (mysqlStatus === 'running') {
@@ -151,19 +106,11 @@ export default function App() {
     } else {
       setMysqlStatus('starting');
       try {
-        // 1. Ensure Data Directory Exists
         console.log("Initializing DB...");
         await invoke('init_mysql', { versionFolder: folderName });
 
-        // 2. Start Daemon
-        // Path: .stackmanager/services/mariadb.../bin/mysqld.exe
-        // Args: --console --datadir=".../data/mysql"
-        const userProfile = await invoke<string>('init_environment').then(s => s.split(' at ')[1].replace(/"/g, '').replace('.stackmanager', ''));
-        // (Note: Getting the path in JS is tricky, usually better to pass full path from Rust. 
-        // For this demo, we assume standard path or rely on Rust to know paths.
-        // To keep it simple, let's construct the path assuming standard Windows layout)
-
-        const binPath = `C:/Users/MadeIndonesia/.stackmanager/services/${folderName}/${folderName}/bin/mysqld.exe`;
+        // Note: Point to the double folder structure we found earlier
+        const binPath = `C:/Users/${import.meta.env.VITE_USERNAME || 'MadeIndonesia'}/.stackmanager/services/${folderName}/${folderName}/bin/mysqld.exe`;
         const dataPath = `C:/Users/${import.meta.env.VITE_USERNAME || 'MadeIndonesia'}/.stackmanager/data/mysql`;
 
         await ServiceAPI.start({
@@ -181,12 +128,83 @@ export default function App() {
     }
   };
 
+  // --- Add Project (Folder Picker) ---
+  const addNewProject = async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "Select Project Folder" });
+      if (selected && typeof selected === 'string') {
+        const name = selected.split(/[\\/]/).pop() || "Untitled Project";
+        const newProj: Project = {
+          id: crypto.randomUUID(),
+          name: name,
+          path: selected,
+          framework: 'custom',
+          domain: 'localhost',
+          port: 8000 + projects.length + 1,
+          status: 'stopped',
+          phpVersion: '8.2'
+        };
+        updateAndSave([...projects, newProj]);
+      }
+    } catch (err) {
+      console.error("Failed to pick folder:", err);
+    }
+  };
+
+  const createLaravel = async () => {
+    try {
+      await invoke('init_composer');
+      const parentFolder = await open({ directory: true, multiple: false, title: "Select Parent Folder" });
+
+      if (!parentFolder || typeof parentFolder !== 'string') return;
+
+      const projectName = prompt("Project Name:", "my-blog");
+      if (!projectName) return;
+
+      // START INSTALLATION MODE
+      setIsInstalling(true);
+      setComposerLogs(["Starting Composer..."]);
+
+      // Listen for events
+      const unlisten = await listen<string>('composer-progress', (event) => {
+        setComposerLogs(prev => [...prev, event.payload]);
+      });
+
+      const newPath = await invoke<string>('create_laravel_project', {
+        projectName: projectName,
+        parentFolder: parentFolder
+      });
+
+      // Stop listening
+      unlisten();
+      setIsInstalling(false);
+
+      const newProj: Project = {
+        id: crypto.randomUUID(),
+        name: projectName,
+        path: newPath,
+        framework: 'laravel',
+        domain: 'localhost',
+        port: 8000 + projects.length + 1,
+        status: 'stopped',
+        phpVersion: '8.2'
+      };
+      updateAndSave([...projects, newProj]);
+      alert("Done!");
+
+    } catch (err) {
+      setIsInstalling(false);
+      console.error(err);
+      alert("Error: " + err);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
       {/* Sidebar */}
-      <div className="w-64 bg-white border-r border-slate-200 p-6">
+      <div className="w-64 bg-white border-r border-slate-200 p-6 flex flex-col">
         <h1 className="text-xl font-bold text-indigo-600">StackManager</h1>
-        <p className="text-xs text-slate-400 mb-6">v0.1.0 Dev</p>
+        <p className="text-xs text-slate-400 mb-6">v0.2.0 Beta</p>
 
         {/* GLOBAL SERVICES */}
         <div className="mb-6">
@@ -217,8 +235,8 @@ export default function App() {
           )}
         </div>
 
-        {/* Helper Tools Section */}
-        <div className="space-y-2">
+        {/* Helper Tools */}
+        <div className="space-y-2 border-t border-slate-100 pt-4">
           <p className="text-xs text-slate-400 mb-2">Installers</p>
           <button onClick={() => invoke('download_service', {
             name: 'mariadb-10.11.6-winx64',
@@ -227,41 +245,49 @@ export default function App() {
             className="w-full text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 p-2 rounded text-left flex items-center gap-2">
             <span className="font-bold">+</span> Get MariaDB 10.11
           </button>
+
           <button onClick={() => invoke('download_service', {
             name: 'php-8.2.10-Win32-vs16-x64',
             url: 'https://windows.php.net/downloads/releases/archives/php-8.2.10-Win32-vs16-x64.zip'
           }).then(() => alert("Downloaded!"))}
-            className="w-full text-xs bg-slate-100 hover:bg-slate-200 p-2 rounded text-left">
-            1. Download PHP 8.2
-          </button >
+            className="w-full text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 p-2 rounded text-left flex items-center gap-2">
+            <span className="font-bold">+</span> Get PHP 8.2
+          </button>
 
           <button onClick={() => invoke('set_active_version', {
             service: 'php',
             versionFolder: 'php-8.2.10-Win32-vs16-x64'
           }).then(() => alert("Activated!"))}
             className="w-full text-xs bg-slate-100 hover:bg-slate-200 p-2 rounded text-left">
-            2. Activate PHP 8.2
-          </button>
-        </div >
-        <div className="mt-auto">
-          <button onClick={addNewProject} className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg transition-colors text-sm font-medium shadow-lg shadow-indigo-500/20">
-            <PlusCircle size={16} /> New Project
+            Activate PHP 8.2
           </button>
         </div>
-      </div >
+
+        <div className="mt-auto space-y-2">
+          <button onClick={createLaravel} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 py-2 px-4 rounded-lg transition-colors text-sm font-medium border border-red-200">
+            <PlusCircle size={16} /> New Laravel App
+          </button>
+          <button onClick={addNewProject} className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg transition-colors text-sm font-medium shadow-lg shadow-indigo-500/20">
+            <PlusCircle size={16} /> Import Project
+          </button>
+        </div>
+      </div>
 
       {/* Main Area */}
-      < div className="flex-1 p-8" >
+      <div className="flex-1 p-8">
         <header className="flex justify-between mb-8">
           <h2 className="text-2xl font-bold text-slate-700">My Projects</h2>
         </header>
 
         <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+          {projects.length === 0 && (
+            <div className="p-8 text-center text-slate-400">No projects yet. Click "New Laravel App" or "Import Project" to get started.</div>
+          )}
           {projects.map((project) => (
             <div key={project.id} className="flex items-center justify-between p-4 border-b last:border-0">
               <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center font-bold">
-                  PHP
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold text-xs ${project.framework === 'laravel' ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                  {project.framework === 'laravel' ? 'Lr' : 'PHP'}
                 </div>
                 <div>
                   <h3 className="font-medium text-slate-800">{project.name}</h3>
@@ -298,7 +324,23 @@ export default function App() {
             </div>
           ))}
         </div>
-      </div >
-    </div >
+      </div>
+      {isInstalling && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-10">
+          <div className="bg-slate-900 text-slate-200 w-full max-w-3xl rounded-xl shadow-2xl border border-slate-700 flex flex-col h-[500px]">
+            <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800 rounded-t-xl">
+              <h3 className="font-bold flex items-center gap-2"><Terminal size={18} /> Installing Laravel...</h3>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+            </div>
+            <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1">
+              {composerLogs.map((log, i) => (
+                <div key={i} className="break-all">{log}</div>
+              ))}
+              <div ref={(el) => el?.scrollIntoView({ behavior: "smooth" })}></div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
