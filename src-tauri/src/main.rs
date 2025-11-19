@@ -8,12 +8,14 @@ mod filesystem;
 mod downloader;
 mod shim;
 mod store;
+mod database;
 
 use process_manager::{start_service, stop_service, ServiceState};
 use filesystem::{init_environment, get_services};
 use downloader::download_service;
 use shim::set_active_version;
-use store::{save_projects, load_projects}; 
+use store::{save_projects, load_projects};
+use database::init_mysql;
 
 #[tauri::command]
 fn open_in_browser(url: String) {
@@ -32,7 +34,8 @@ fn main() {
             set_active_version,
             open_in_browser,
             save_projects,
-            load_projects
+            load_projects,
+            init_mysql
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
