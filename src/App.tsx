@@ -45,64 +45,78 @@ const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
 };
 
 export default function App() {
-  const [projects, setProjects] = useState<Project[]>(initialProjects);
+  // 1. Start with EMPTY projects
+  const [projects, setProjects] = useState<Project[]>([]);
 
-  // --- Init Environment on Load ---
+  // --- Helper to Save to Disk ---
+  const updateAndSave = async (newProjects: Project[]) => {
+    setProjects(newProjects);
+    // Convert to JSON string and send to Rust
+    await invoke('save_projects', { data: JSON.stringify(newProjects) });
+  };
+
+  // --- Load on Start ---
   useEffect(() => {
-    invoke('init_environment').catch(console.error);
+    const init = async () => {
+      try {
+        await invoke('init_environment');
+
+        // LOAD PROJECTS FROM DISK
+        const json = await invoke<string>('load_projects');
+        const savedProjects = JSON.parse(json);
+        if (savedProjects.length > 0) {
+          setProjects(savedProjects);
+        } else {
+          // If empty, maybe add a default one for guidance?
+          const defaultProj: Project = {
+            id: 'demo-1',
+            name: 'My First Project',
+            path: 'D:/stack-test',
+            framework: 'custom',
+            domain: 'localhost',
+            port: 8000,
+            status: 'stopped',
+            phpVersion: '8.2',
+          };
+          updateAndSave([defaultProj]);
+        }
+      } catch (error) {
+        console.error("Init Failed:", error);
+      }
+    };
+    init();
   }, []);
 
-  // --- THE REAL SERVER LOGIC ---
+  // --- Updated Toggle Function (Uses updateAndSave) ---
   const toggleProjectService = async (project: Project) => {
     const backendId = `proj_${project.id}`;
     const newStatus = project.status === 'running' ? 'stopped' : 'running';
 
-    // Optimistic Update
-    setProjects(prev => prev.map(p =>
+    // Update State & Save
+    const updatedList = projects.map(p =>
       p.id === project.id ? { ...p, status: newStatus === 'running' ? 'starting' : 'stopped' } : p
-    ));
+    );
+    // Note: We don't necessarily need to save "status" to disk (it should probably start as stopped), 
+    // but for now, saving everything is fine.
+    setProjects(updatedList);
 
-    try {
-      if (newStatus === 'running') {
-        console.log(`Starting PHP Server on port ${project.port}...`);
+    // ... (Keep the rest of the PHP start/stop logic exactly the same) ...
+    // ... just ensure you use 'setProjects' correctly ...
+  };
 
-        // 1. Define the Path to our Shimmed PHP
-        // This path always points to the currently "Activated" version
-        const phpPath = "C:/Users/MadeIndonesia/.stackmanager/bin/php/php.exe";
-
-        // 2. Call the Rust Backend
-        // Command: php -S 127.0.0.1:8000 -t C:/stack-test
-        const res = await ServiceAPI.start({
-          id: backendId,
-          binPath: phpPath,
-          args: [
-            "-S", `127.0.0.1:${project.port}`,
-            "-t", project.path
-          ]
-        });
-        console.log("Server Started:", res);
-
-        // 3. Mark as Running
-        setProjects(prev => prev.map(p =>
-          p.id === project.id ? { ...p, status: 'running' } : p
-        ));
-
-      } else {
-        // STOPPING
-        console.log("Stopping Server...");
-        await ServiceAPI.stop(backendId);
-
-        setProjects(prev => prev.map(p =>
-          p.id === project.id ? { ...p, status: 'stopped' } : p
-        ));
-      }
-    } catch (err) {
-      console.error("Failed:", err);
-      alert("Error: " + err);
-      setProjects(prev => prev.map(p =>
-        p.id === project.id ? { ...p, status: 'error' } : p
-      ));
-    }
+  // --- NEW: Add Project Function ---
+  const addNewProject = () => {
+    const newProj: Project = {
+      id: crypto.randomUUID(),
+      name: 'New Project ' + (projects.length + 1),
+      path: 'C:/stack-test', // Default path
+      framework: 'custom',
+      domain: 'localhost',
+      port: 8000 + projects.length + 1, // Auto-increment port
+      status: 'stopped',
+      phpVersion: '8.2'
+    };
+    updateAndSave([...projects, newProj]);
   };
 
   return (
@@ -114,6 +128,11 @@ export default function App() {
 
         {/* Helper Tools Section */}
         <div className="space-y-2">
+          <button
+            onClick={addNewProject}
+            className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg transition-colors text-sm font-medium shadow-lg shadow-indigo-500/20">
+            <PlusCircle size={16} /> New Project
+          </button>
           <button onClick={() => invoke('download_service', {
             name: 'php-8.2.10-Win32-vs16-x64',
             url: 'https://windows.php.net/downloads/releases/archives/php-8.2.10-Win32-vs16-x64.zip'
