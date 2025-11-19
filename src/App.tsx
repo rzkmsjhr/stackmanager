@@ -1,14 +1,11 @@
-import React, { useState, useEffect } from 'react'; // <--- Add useEffect
-import { 
-  Play, Square, Trash2, Info, 
-  Globe, Folder, Activity, Settings, 
+import React, { useState, useEffect } from 'react';
+import {
+  Play, Square, Trash2, Info,
+  Globe, Folder, Activity, Settings,
   PlusCircle, CheckCircle, XCircle, Terminal
 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core'; // <--- Import invoke
+import { invoke } from '@tauri-apps/api/core';
 import { ServiceAPI } from './api/serviceControl';
-
-// ... (Keep your existing Types and Mock Data here) ...
-// ... (Keep FrameworkIcon and StatusIndicator components here) ...
 
 // --- Types ---
 type ServiceStatus = 'running' | 'stopped' | 'error' | 'starting';
@@ -17,51 +14,26 @@ interface Project {
   id: string;
   name: string;
   path: string;
-  framework: 'laravel' | 'symfony' | 'wordpress' | 'nodejs' | 'unknown';
+  framework: 'laravel' | 'symfony' | 'wordpress' | 'custom';
   domain: string;
+  port: number; // Added Port
   status: ServiceStatus;
   phpVersion: string;
-  webServer: 'nginx' | 'apache';
-  createdAt: string;
-  lastActive: string;
 }
 
-// --- Mock Data ---
+// --- REAL DATA FOR TESTING ---
 const initialProjects: Project[] = [
   {
-    id: '1',
-    name: 'E-Commerce API',
-    path: 'C:/dev/ecommerce-api',
-    framework: 'laravel',
-    domain: 'api.shop.test',
+    id: 'test-1',
+    name: 'My Test Project',
+    path: 'D:/stack-test', // <--- MAKE SURE THIS FOLDER EXISTS
+    framework: 'custom',
+    domain: 'localhost',
+    port: 8000,
     status: 'stopped',
-    phpVersion: '8.2.14',
-    webServer: 'nginx',
-    createdAt: '2023-10-12',
-    lastActive: 'Just now'
-  },
-  {
-    id: '2',
-    name: 'Client Portfolio',
-    path: 'C:/dev/client-portfolio',
-    framework: 'wordpress',
-    domain: 'portfolio.test',
-    status: 'stopped',
-    phpVersion: '7.4.33',
-    webServer: 'apache',
-    createdAt: '2023-11-05',
-    lastActive: '2 days ago'
+    phpVersion: '8.2 (Global)',
   }
 ];
-
-const FrameworkIcon = ({ framework }: { framework: string }) => {
-  switch (framework) {
-    case 'laravel': return <div className="w-8 h-8 bg-red-100 text-red-600 rounded flex items-center justify-center font-bold text-xs">Lr</div>;
-    case 'symfony': return <div className="w-8 h-8 bg-black text-white rounded flex items-center justify-center font-bold text-xs">Sy</div>;
-    case 'wordpress': return <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded flex items-center justify-center font-bold text-xs">Wp</div>;
-    default: return <div className="w-8 h-8 bg-gray-100 text-gray-600 rounded flex items-center justify-center font-bold text-xs">?</div>;
-  }
-};
 
 const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
   switch (status) {
@@ -74,197 +46,141 @@ const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>(initialProjects);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
-  // --- NEW: Run Environment Setup on Start ---
+  // --- Init Environment on Load ---
   useEffect(() => {
-    const init = async () => {
-      try {
-        const msg = await invoke('init_environment');
-        console.log("Setup Success:", msg);
-        
-        const services = await invoke('get_services');
-        console.log("Installed Services:", services);
-      } catch (error) {
-        console.error("Setup Failed:", error);
-      }
-    };
-    init();
+    invoke('init_environment').catch(console.error);
   }, []);
-  // -------------------------------------------
 
-  // ... (Keep toggleProjectService function) ...
+  // --- THE REAL SERVER LOGIC ---
   const toggleProjectService = async (project: Project) => {
+    const backendId = `proj_${project.id}`;
     const newStatus = project.status === 'running' ? 'stopped' : 'running';
-    
-    setProjects(prev => prev.map(p => 
+
+    // Optimistic Update
+    setProjects(prev => prev.map(p =>
       p.id === project.id ? { ...p, status: newStatus === 'running' ? 'starting' : 'stopped' } : p
     ));
 
     try {
-      const backendId = `proj_${project.id}`;
-
       if (newStatus === 'running') {
-        console.log("Calling Rust to start service...");
-        setTimeout(() => {
-           setProjects(prev => prev.map(p => 
-             p.id === project.id ? { ...p, status: 'running' } : p
-           ));
-        }, 1000);
+        console.log(`Starting PHP Server on port ${project.port}...`);
+
+        // 1. Define the Path to our Shimmed PHP
+        // This path always points to the currently "Activated" version
+        const phpPath = "C:/Users/MadeIndonesia/.stackmanager/bin/php/php.exe";
+
+        // 2. Call the Rust Backend
+        // Command: php -S 127.0.0.1:8000 -t C:/stack-test
+        const res = await ServiceAPI.start({
+          id: backendId,
+          binPath: phpPath,
+          args: [
+            "-S", `127.0.0.1:${project.port}`,
+            "-t", project.path
+          ]
+        });
+        console.log("Server Started:", res);
+
+        // 3. Mark as Running
+        setProjects(prev => prev.map(p =>
+          p.id === project.id ? { ...p, status: 'running' } : p
+        ));
+
       } else {
-        setProjects(prev => prev.map(p => 
+        // STOPPING
+        console.log("Stopping Server...");
+        await ServiceAPI.stop(backendId);
+
+        setProjects(prev => prev.map(p =>
           p.id === project.id ? { ...p, status: 'stopped' } : p
         ));
       }
     } catch (err) {
-      console.error(err);
-      setProjects(prev => prev.map(p => 
+      console.error("Failed:", err);
+      alert("Error: " + err);
+      setProjects(prev => prev.map(p =>
         p.id === project.id ? { ...p, status: 'error' } : p
       ));
     }
   };
 
-  // ... (Keep openDetails function) ...
-  const openDetails = (project: Project) => {
-    setSelectedProject(project);
-    setIsDetailsOpen(true);
-  };
-
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
-      
-      {/* --- Left Sidebar --- */}
-      <div className="w-64 bg-white border-r border-slate-200 flex flex-col shadow-sm z-10">
-        <div className="p-6">
-          <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">
-            StackManager
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">v0.1.0 Dev</p>
-        </div>
+      {/* Sidebar */}
+      <div className="w-64 bg-white border-r border-slate-200 p-6">
+        <h1 className="text-xl font-bold text-indigo-600">StackManager</h1>
+        <p className="text-xs text-slate-400 mb-6">v0.1.0 Dev</p>
 
-        <div className="mt-auto p-4 border-t border-slate-100">
-          <button className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg transition-colors text-sm font-medium shadow-lg shadow-indigo-500/20">
-            <PlusCircle size={16} /> New Project
+        {/* Helper Tools Section */}
+        <div className="space-y-2">
+          <button onClick={() => invoke('download_service', {
+            name: 'php-8.2.10-Win32-vs16-x64',
+            url: 'https://windows.php.net/downloads/releases/archives/php-8.2.10-Win32-vs16-x64.zip'
+          }).then(() => alert("Downloaded!"))}
+            className="w-full text-xs bg-slate-100 hover:bg-slate-200 p-2 rounded text-left">
+            1. Download PHP 8.2
           </button>
-          <div className="flex gap-2 mt-3 justify-center">
-            <button className="p-2 hover:bg-slate-100 rounded-md text-slate-500"><Settings size={18}/></button>
-            <button className="p-2 hover:bg-slate-100 rounded-md text-slate-500"><Terminal size={18}/></button>
-          </div>
+
+          <button onClick={() => invoke('set_active_version', {
+            service: 'php',
+            versionFolder: 'php-8.2.10-Win32-vs16-x64'
+          }).then(() => alert("Activated!"))}
+            className="w-full text-xs bg-slate-100 hover:bg-slate-200 p-2 rounded text-left">
+            2. Activate PHP 8.2
+          </button>
         </div>
       </div>
 
-      {/* --- Main Content --- */}
-      <div className="flex-1 flex flex-col min-w-0">
-        
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-slate-700">My Projects</h2>
-            <span className="bg-slate-100 text-slate-500 text-xs px-2 py-1 rounded-full">{projects.length} active</span>
-          </div>
-          <div className="flex gap-3">
-             <input 
-              type="text" 
-              placeholder="Search projects..." 
-              className="bg-slate-100 border-none rounded-lg px-4 py-2 text-sm w-64 focus:ring-2 focus:ring-indigo-500 outline-none"
-             />
-          </div>
+      {/* Main Area */}
+      <div className="flex-1 p-8">
+        <header className="flex justify-between mb-8">
+          <h2 className="text-2xl font-bold text-slate-700">My Projects</h2>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8">
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            
-            <div className="grid grid-cols-12 gap-4 p-4 bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              <div className="col-span-4">Project</div>
-              <div className="col-span-3">Domain</div>
-              <div className="col-span-2">Stack</div>
-              <div className="col-span-2">Status</div>
-              <div className="col-span-1 text-right">Actions</div>
-            </div>
-
-            {projects.map((project) => (
-              <div key={project.id} className="grid grid-cols-12 gap-4 p-4 items-center border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors group">
-                
-                <div className="col-span-4 flex gap-3 items-center">
-                  <FrameworkIcon framework={project.framework} />
-                  <div className="min-w-0">
-                    <h3 className="font-medium text-slate-700 truncate">{project.name}</h3>
-                    <div className="flex items-center gap-1 text-xs text-slate-400 truncate">
-                      <Folder size={10} />
-                      {project.path}
-                    </div>
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+          {projects.map((project) => (
+            <div key={project.id} className="flex items-center justify-between p-4 border-b last:border-0">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center font-bold">
+                  PHP
+                </div>
+                <div>
+                  <h3 className="font-medium text-slate-800">{project.name}</h3>
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Folder size={12} /> {project.path}
                   </div>
-                </div>
-
-                <div className="col-span-3">
-                  <a href={`http://${project.domain}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-sm text-indigo-600 hover:underline truncate">
-                    <Globe size={12} />
-                    {project.domain}
-                  </a>
-                </div>
-
-                <div className="col-span-2">
-                  <div className="text-xs font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded inline-block">
-                    PHP {project.phpVersion}
-                  </div>
-                </div>
-
-                <div className="col-span-2">
-                  <StatusIndicator status={project.status} />
-                </div>
-
-                <div className="col-span-1 flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button 
-                    onClick={() => toggleProjectService(project)}
-                    className={`p-1.5 rounded-md transition-colors ${project.status === 'running' ? 'text-red-500 hover:bg-red-50' : 'text-emerald-500 hover:bg-emerald-50'}`}
-                  >
-                    {project.status === 'running' ? <Square size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
-                  </button>
-                  <button 
-                    onClick={() => openDetails(project)}
-                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
-                  >
-                    <Info size={16} />
-                  </button>
                 </div>
               </div>
-            ))}
-          </div>
+
+              <div className="flex items-center gap-8">
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    invoke('open_in_browser', { url: `http://localhost:${project.port}` });
+                  }}
+                  className="text-indigo-600 text-sm hover:underline flex items-center gap-1"
+                >
+                  <Globe size={14} /> localhost:{project.port}
+                </a>
+
+                <StatusIndicator status={project.status} />
+
+                <button
+                  onClick={() => toggleProjectService(project)}
+                  className={`p-2 rounded-full transition-colors ${project.status === 'running'
+                    ? 'bg-red-50 text-red-500 hover:bg-red-100'
+                    : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100'
+                    }`}
+                >
+                  {project.status === 'running' ? <Square size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
-
-      {/* --- Details Modal --- */}
-      {isDetailsOpen && selectedProject && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-start">
-              <h3 className="text-xl font-bold text-slate-800">{selectedProject.name}</h3>
-              <button onClick={() => setIsDetailsOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <XCircle size={24} />
-              </button>
-            </div>
-            <div className="p-6">
-              <div className="p-4 bg-slate-100 rounded-lg text-sm text-slate-600 mb-4">
-                <strong>Debug Info:</strong><br/>
-                Check the Browser Console (F12).<br/>
-                You should see "Setup Success: Environment initialized".<br/>
-                Also check your user folder for `.stackmanager`.
-              </div>
-              <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
-                  <span className="text-sm font-medium text-slate-700">PHP Version</span>
-                  <select 
-                    className="text-sm bg-slate-50 border border-slate-200 rounded px-2 py-1"
-                    defaultValue={selectedProject.phpVersion}
-                  >
-                    <option>8.3.0</option>
-                    <option>8.2.14</option>
-                    <option>7.4.33</option>
-                  </select>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
