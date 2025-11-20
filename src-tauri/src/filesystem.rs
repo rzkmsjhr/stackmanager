@@ -65,3 +65,72 @@ pub fn get_services() -> Result<Vec<String>, String> {
     
     Ok(services)
 }
+
+#[tauri::command]
+pub fn get_service_bin_path(service_name: String) -> Result<String, String> {
+    let home = get_home_dir().ok_or("Could not find home directory")?;
+    let services_path = home.join(".stackmanager").join("services");
+    let base_path = services_path.join(&service_name);
+
+    if !base_path.exists() {
+        return Err(format!("Service {} not installed", service_name));
+    }
+
+    // Logic to find the executable folder (bin)
+    // 1. Check for direct 'bin'
+    let direct_bin = base_path.join("bin");
+    if direct_bin.exists() {
+        return Ok(direct_bin.to_string_lossy().to_string());
+    }
+
+    // 2. Check for nested folder with same name (e.g. mariadb/mariadb/bin)
+    let nested_bin = base_path.join(&service_name).join("bin");
+    if nested_bin.exists() {
+        return Ok(nested_bin.to_string_lossy().to_string());
+    }
+    
+    // 3. Fallback: Look for ANY subfolder that has a 'bin' inside
+    if let Ok(entries) = fs::read_dir(&base_path) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                 if file_type.is_dir() {
+                     let candidate = entry.path().join("bin");
+                     if candidate.exists() {
+                         return Ok(candidate.to_string_lossy().to_string());
+                     }
+                 }
+            }
+        }
+     }
+
+    // If no bin found, maybe the executable is in root (some tools do this)
+    Ok(base_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn get_user_home() -> Result<String, String> {
+    let home = get_home_dir().ok_or("Home not found")?;
+    Ok(home.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn delete_service_folder(folder_name: String) -> Result<String, String> {
+    let home = get_home_dir().ok_or("Could not find home directory")?;
+    let services_path = home.join(".stackmanager").join("services");
+    let target_path = services_path.join(&folder_name);
+
+    // Safety Check: Ensure the target is actually inside the services directory
+    // and prevents ".." traversal attacks or deleting root.
+    if !target_path.starts_with(&services_path) {
+        return Err("Invalid path: Cannot delete outside of services directory".to_string());
+    }
+
+    if !target_path.exists() {
+        return Err("Folder does not exist".to_string());
+    }
+
+    // Perform Deletion
+    fs::remove_dir_all(&target_path).map_err(|e| e.to_string())?;
+
+    Ok(format!("Deleted {}", folder_name))
+}

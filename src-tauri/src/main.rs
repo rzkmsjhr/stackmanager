@@ -12,7 +12,7 @@ mod database;
 mod composer;
 
 use process_manager::{start_service, stop_service, ServiceState};
-use filesystem::{init_environment, get_services};
+use filesystem::{init_environment, get_services, get_service_bin_path, get_user_home, delete_service_folder};
 use downloader::download_service;
 use shim::set_active_version;
 use store::{save_projects, load_projects};
@@ -33,6 +33,9 @@ fn main() {
             stop_service,
             init_environment,
             get_services,
+            get_service_bin_path,
+            get_user_home,
+            delete_service_folder,
             download_service,
             set_active_version,
             open_in_browser,
