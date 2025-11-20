@@ -10,16 +10,19 @@ mod shim;
 mod store;
 mod database;
 mod composer;
-mod terminal; // <-- New
+mod terminal;
 
 use process_manager::{start_service, stop_service, ServiceState};
-use filesystem::{init_environment, get_services, get_service_bin_path, get_user_home, delete_service_folder};
+use filesystem::{
+    init_environment, get_services, get_service_bin_path, get_user_home, 
+    delete_service_folder, delete_project_dir, check_projects_status // <-- Added these
+};
 use downloader::download_service;
-use shim::{set_active_version, get_active_version}; // <-- Update
+use shim::{set_active_version, get_active_version};
 use store::{save_projects, load_projects};
 use database::init_mysql;
 use composer::{init_composer, create_laravel_project};
-use terminal::open_project_terminal; // <-- New
+use terminal::open_project_terminal;
 
 #[tauri::command]
 fn open_in_browser(url: String) {
@@ -40,14 +43,16 @@ fn main() {
             delete_service_folder,
             download_service,
             set_active_version,
-            get_active_version, // <-- Registered
+            get_active_version,
             open_in_browser,
             save_projects,
             load_projects,
             init_mysql,
             init_composer,
             create_laravel_project,
-            open_project_terminal // <-- Registered
+            open_project_terminal,
+            delete_project_dir, // <-- Registered
+            check_projects_status // <-- Registered
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
