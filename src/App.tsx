@@ -3,10 +3,10 @@ import {
   Play, Square, Trash2, Info, 
   Globe, Folder, Activity, Settings, 
   PlusCircle, CheckCircle, XCircle, Terminal, Database,
-  Download, X
+  Download, X, Star, Monitor
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { open, confirm } from '@tauri-apps/plugin-dialog';
+import { open, confirm, message } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { ServiceAPI } from './api/serviceControl';
 
@@ -49,6 +49,9 @@ export default function App() {
   const [installedPhp, setInstalledPhp] = useState<string[]>([]);
   const [customPhpVersion, setCustomPhpVersion] = useState(''); 
   const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null); 
+  
+  // Global State
+  const [currentGlobalPhp, setCurrentGlobalPhp] = useState<string>('Loading...');
 
   // Preset PHP Versions
   const phpPresets = [
@@ -63,11 +66,14 @@ export default function App() {
     await invoke('save_projects', { data: JSON.stringify(newProjects) });
   };
 
-  const fetchInstalledServices = async () => {
+  const refreshData = async () => {
       try {
           const services = await invoke<string[]>('get_services');
           const php = services.filter(s => s.startsWith('php-'));
           setInstalledPhp(php);
+
+          const active = await invoke<string>('get_active_version', { service: 'php' });
+          setCurrentGlobalPhp(active);
       } catch (e) {
           console.error("Failed to fetch services", e);
       }
@@ -86,7 +92,7 @@ export default function App() {
           setProjects(savedProjects);
         }
         
-        fetchInstalledServices();
+        refreshData();
       } catch (error) {
         console.error("Init Failed:", error);
       }
@@ -94,19 +100,23 @@ export default function App() {
     init();
   }, []);
 
-  // --- Delete Logic ---
-  const handleDeletePhp = async (folderName: string) => {
-      const confirmed = await confirm(`Are you sure you want to delete ${folderName}? This cannot be undone.`, {
-        title: 'Confirm Deletion',
-        kind: 'warning'
-      });
-      if (!confirmed) {
-          return;
+  // --- Actions ---
+
+  const handleSetGlobalPhp = async (folderName: string) => {
+      try {
+          await invoke('set_active_version', { service: 'php', versionFolder: folderName });
+          await message(`Global PHP version set to ${folderName}`, { title: 'Success', kind: 'info' });
+          refreshData();
+      } catch (e) {
+          await message(`Failed to set global version: ${e}`, { title: 'Error', kind: 'error' });
       }
-      
+  };
+
+  const handleDeletePhp = async (folderName: string) => {
+      if (!await confirm(`Delete ${folderName}?`, { title: 'Confirm', kind: 'warning' })) return;
       try {
           await invoke('delete_service_folder', { folderName });
-          fetchInstalledServices(); 
+          refreshData(); 
       } catch (e) {
           alert("Delete failed: " + e);
       }
@@ -116,16 +126,15 @@ export default function App() {
       setDownloadingVersion(name);
       try {
           await invoke('download_service', { name, url });
-          alert(`Successfully downloaded ${name}`);
-          fetchInstalledServices(); 
+          await message(`${name} downloaded successfully!`, { title: 'Success', kind: 'info' });
+          refreshData(); 
       } catch (e) {
-          alert("Download failed: " + e);
+          await message(`Download failed: ${e}`, { title: 'Error', kind: 'error' });
       } finally {
           setDownloadingVersion(null);
       }
   };
 
-  // --- Legacy Logic ---
   const handleCustomDownload = () => {
       if (!customPhpVersion) return;
       
@@ -142,12 +151,8 @@ export default function App() {
       let arch = "x64";
 
       if (major === 5) {
-          if (minor <= 4) {
-              compiler = "VC9"; 
-              arch = "x86";
-          } else {
-              compiler = "vc11"; 
-          }
+          if (minor <= 4) { compiler = "VC9"; arch = "x86"; } 
+          else { compiler = "vc11"; }
       } else if (major === 7) {
           if (minor <= 1) compiler = "vc14"; 
           else compiler = "vc15";
@@ -156,8 +161,30 @@ export default function App() {
       const folderName = `php-${customPhpVersion}-Win32-${compiler}-${arch}`;
       const url = `https://windows.php.net/downloads/releases/archives/${folderName}.zip`;
 
-      if (confirm(`Detected Legacy Configuration:\nCompiler: ${compiler}\nArch: ${arch}\n\nAttempting to download:\n${folderName}\n\nFrom:\n${url}`)) {
+      if (confirm(`Detected Configuration: ${compiler} ${arch}\nDownload ${folderName}?`)) {
           handleDownloadPhp(folderName, url);
+      }
+  };
+
+  const openProjectTerminal = async (project: Project) => {
+      try {
+          let phpPath = "";
+
+          if (project.phpVersion && project.phpVersion !== 'Global') {
+              // Project specific
+              const versionBin = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion });
+              phpPath = versionBin; 
+          } else {
+              // Use Global (Shim path)
+              phpPath = `${userHome}\\.stackmanager\\bin\\php`;
+          }
+
+          await invoke('open_project_terminal', { 
+              cwd: project.path,
+              phpBinPath: phpPath
+          });
+      } catch (e) {
+          await message(`Failed to open terminal: ${e}`, { title: "Error", kind: "error" });
       }
   };
 
@@ -178,22 +205,18 @@ export default function App() {
              setUserHome(home);
         }
         
-        // Default to global shim path
         let phpPath = `${home}\\.stackmanager\\bin\\php\\php.exe`;
 
         // Project-Specific Version Switching
-        if (project.phpVersion && project.phpVersion !== 'Global' && project.phpVersion !== 'No PHP installed') {
+        if (project.phpVersion && project.phpVersion !== 'Global') {
              try {
                  const versionBin = await invoke<string>('get_service_bin_path', { 
                     serviceName: project.phpVersion 
                  });
                  phpPath = `${versionBin}\\php.exe`;
-                 console.log(`Using Project-Specific PHP: ${phpPath}`);
              } catch (e) {
-                 console.warn("Could not find specific version, falling back to Global.", e);
+                 console.warn("Specific version not found, trying global.");
              }
-        } else {
-             console.log(`Using Global PHP: ${phpPath}`);
         }
 
         await ServiceAPI.start({
@@ -210,7 +233,7 @@ export default function App() {
       }
     } catch (err) {
       console.error("Failed:", err);
-      alert("Error: " + err);
+      await message(`Error starting PHP: ${err}`, { title: 'Service Error', kind: 'error' });
       setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'error' } : p));
     }
   };
@@ -225,29 +248,18 @@ export default function App() {
     } else {
       setMysqlStatus('starting');
       try {
-        console.log("Initializing DB...");
         await invoke('init_mysql', { versionFolder: folderName });
-        
-        const binDir = await invoke<string>('get_service_bin_path', { 
-            serviceName: folderName 
-        });
+        const binDir = await invoke<string>('get_service_bin_path', { serviceName: folderName });
         const binPath = `${binDir}\\mysqld.exe`;
-
-        let home = userHome;
-        if (!home) {
-             home = await invoke<string>('get_user_home');
-        }
-        const dataPath = `${home}\\.stackmanager\\data\\mysql`;
+        const dataPath = `${userHome || await invoke('get_user_home')}\\.stackmanager\\data\\mysql`;
 
         await ServiceAPI.start({
           id: serviceId,
           binPath: binPath,
           args: ["--console", `--datadir=${dataPath}`]
         });
-        
         setMysqlStatus('running');
       } catch (e) {
-        console.error(e);
         alert("MySQL Error: " + e);
         setMysqlStatus('error');
       }
@@ -279,11 +291,10 @@ export default function App() {
   const createLaravel = async () => {
     try {
       await invoke('init_composer');
-      const parentFolder = await open({ directory: true, multiple: false, title: "Select Parent Folder for New Project" });
-
+      const parentFolder = await open({ directory: true, multiple: false, title: "Select Folder" });
       if (!parentFolder || typeof parentFolder !== 'string') return;
 
-      const projectName = prompt("Enter new project name (e.g., my-blog):", "my-blog");
+      const projectName = prompt("Project Name:", "my-blog");
       if (!projectName) return;
 
       setIsInstalling(true);
@@ -293,10 +304,7 @@ export default function App() {
         setComposerLogs(prev => [...prev, event.payload]);
       });
       
-      const newPath = await invoke<string>('create_laravel_project', {
-        projectName: projectName,
-        parentFolder: parentFolder
-      });
+      const newPath = await invoke<string>('create_laravel_project', { projectName, parentFolder });
       
       unlisten();
       setIsInstalling(false);
@@ -312,13 +320,11 @@ export default function App() {
           phpVersion: 'Global'
       };
       updateAndSave([...projects, newProj]);
-      
-      alert("Laravel Project Created Successfully!");
+      await message("Laravel Project Created!", { title: "Success", kind: "info" });
 
     } catch (err) {
       setIsInstalling(false);
-      console.error(err);
-      alert("Failed to create project: " + err);
+      await message("Failed: " + err, { title: "Error", kind: "error" });
     }
   };
 
@@ -346,11 +352,20 @@ export default function App() {
         <div className="mb-6">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Global Stack</h3>
             
+            {/* PHP Global Indicator */}
+            <div className="mb-2 flex items-center justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-200 text-indigo-700 rounded"> <Monitor size={16} /> </div>
+                    <div>
+                        <div className="text-sm font-bold text-indigo-900">Global PHP</div>
+                        <div className="text-[10px] text-indigo-500 truncate w-24" title={currentGlobalPhp}>{currentGlobalPhp}</div>
+                    </div>
+                </div>
+            </div>
+
             <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                 <div className="flex items-center gap-3">
-                    <div className="p-2 bg-blue-100 text-blue-600 rounded">
-                        <Database size={16} />
-                    </div>
+                    <div className="p-2 bg-blue-100 text-blue-600 rounded"> <Database size={16} /> </div>
                     <div>
                         <div className="text-sm font-medium">MariaDB</div>
                         <div className="text-[10px] text-slate-400">Port 3306</div>
@@ -360,28 +375,17 @@ export default function App() {
                     {mysqlStatus === 'running' ? <Square size={14} fill="currentColor"/> : <Play size={14} fill="currentColor"/>}
                 </button>
             </div>
-            {mysqlStatus === 'running' && (
-                <div className="mt-2 p-2 bg-blue-50 border border-blue-100 rounded text-[10px] text-blue-800">
-                    <p><strong>Host:</strong> 127.0.0.1</p>
-                    <p><strong>Port:</strong> 3306</p>
-                    <p><strong>User:</strong> root</p>
-                    <p><strong>Pass:</strong> (empty)</p>
-                </div>
-            )}
         </div>
 
         <div className="space-y-2 border-t border-slate-100 pt-4">
           <p className="text-xs text-slate-400 mb-2">Tools</p>
-          
-          <button onClick={() => setShowPhpManager(true)}
-          className="w-full text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 p-2 rounded text-left flex items-center gap-2">
+          <button onClick={() => setShowPhpManager(true)} className="w-full text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 p-2 rounded text-left flex items-center gap-2">
             <Settings size={14} /> Manage PHP Versions
           </button>
-          
           <button onClick={() => invoke('download_service', {
               name: 'mariadb-10.11.6-winx64', 
               url: 'https://archive.mariadb.org/mariadb-10.11.6/winx64-packages/mariadb-10.11.6-winx64.zip'
-            }).then(() => alert("MariaDB Downloaded!"))} 
+            }).then(() => message("MariaDB Downloaded!", {title:"Success", kind:"info"}))} 
             className="w-full text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 p-2 rounded text-left flex items-center gap-2">
             <Download size={14} /> Get MariaDB
           </button>
@@ -419,35 +423,23 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-8">
-                <a 
-                  href="#" 
-                  onClick={(e) => {
-                    e.preventDefault();
-                    invoke('open_in_browser', { url: `http://localhost:${project.port}` });
-                  }}
-                  className="text-indigo-600 text-sm hover:underline flex items-center gap-1"
+              <div className="flex items-center gap-4">
+                <button 
+                    onClick={() => openProjectTerminal(project)}
+                    className="px-3 py-1.5 bg-slate-800 text-white text-xs rounded flex items-center gap-1 hover:bg-slate-700 transition"
+                    title="Open Terminal with this PHP version"
                 >
+                    <Terminal size={12} /> Terminal
+                </button>
+
+                <a href="#" onClick={(e) => { e.preventDefault(); invoke('open_in_browser', { url: `http://localhost:${project.port}` }); }} className="text-indigo-600 text-sm hover:underline flex items-center gap-1">
                   <Globe size={14} /> localhost:{project.port}
                 </a>
-                
                 <StatusIndicator status={project.status} />
-                
-                <button 
-                  onClick={() => toggleProjectService(project)}
-                  className={`p-2 rounded-full transition-colors ${
-                    project.status === 'running' 
-                    ? 'bg-red-50 text-red-500 hover:bg-red-100' 
-                    : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100'
-                  }`}
-                >
+                <button onClick={() => toggleProjectService(project)} className={`p-2 rounded-full transition-colors ${project.status === 'running' ? 'bg-red-50 text-red-500 hover:bg-red-100' : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100'}`}>
                   {project.status === 'running' ? <Square size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
                 </button>
-                
-                <button 
-                    onClick={() => openDetails(project)}
-                    className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
-                  >
+                <button onClick={() => openDetails(project)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors">
                     <Info size={18} />
                 </button>
               </div>
@@ -477,12 +469,10 @@ export default function App() {
                             <div key={v} className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-100 rounded-lg group">
                                 <span className="font-medium text-emerald-800">{v}</span>
                                 <div className="flex items-center gap-2">
-                                    <span className="text-xs bg-white px-2 py-1 rounded border border-emerald-200 text-emerald-600 font-bold">Installed</span>
-                                    <button 
-                                        onClick={() => handleDeletePhp(v)}
-                                        className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-100 rounded transition-colors"
-                                        title="Uninstall"
-                                    >
+                                    <button onClick={() => handleSetGlobalPhp(v)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded flex items-center gap-1">
+                                      <Star size={12} /> Set Global
+                                    </button>
+                                    <button onClick={() => handleDeletePhp(v)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-100 rounded transition-colors">
                                         <Trash2 size={14} />
                                     </button>
                                 </div>
@@ -496,26 +486,15 @@ export default function App() {
                     <div className="grid grid-cols-1 gap-2">
                         {phpPresets.map(preset => {
                             const isInstalled = installedPhp.includes(preset.name);
-                            const isThisDownloading = downloadingVersion === preset.name;
-                            // Disable if installed OR if ANYTHING is currently downloading
-                            const isDisabled = isInstalled || (downloadingVersion !== null && !isThisDownloading);
-
+                            const isDisabled = isInstalled || (downloadingVersion !== null && downloadingVersion !== preset.name);
                             return (
                                 <div key={preset.version} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg">
                                     <div className="flex flex-col">
                                         <span className="font-medium text-slate-700">PHP {preset.version}</span>
                                         <span className="text-xs text-slate-400">{preset.name}</span>
                                     </div>
-                                    <button 
-                                        disabled={isDisabled}
-                                        onClick={() => handleDownloadPhp(preset.name, preset.url)}
-                                        className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${
-                                            isDisabled 
-                                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                                            : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                                        }`}
-                                    >
-                                        {isInstalled ? 'Installed' : (isThisDownloading ? 'Downloading...' : 'Download')}
+                                    <button disabled={isDisabled} onClick={() => handleDownloadPhp(preset.name, preset.url)} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${isDisabled ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}>
+                                        {isInstalled ? 'Installed' : (downloadingVersion === preset.name ? 'Downloading...' : 'Download')}
                                     </button>
                                 </div>
                             )
@@ -528,29 +507,10 @@ export default function App() {
                     <div className="flex gap-2">
                         <div className="flex-1 relative">
                             <span className="absolute left-3 top-2.5 text-slate-400 text-sm">PHP</span>
-                            <input 
-                                type="text" 
-                                placeholder="e.g. 8.1.0"
-                                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-12 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                value={customPhpVersion}
-                                onChange={(e) => setCustomPhpVersion(e.target.value)}
-                            />
+                            <input type="text" placeholder="e.g. 8.1.0" className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-12 pr-4 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" value={customPhpVersion} onChange={(e) => setCustomPhpVersion(e.target.value)}/>
                         </div>
-                        <button 
-                            onClick={handleCustomDownload}
-                            disabled={!customPhpVersion || downloadingVersion !== null}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                !customPhpVersion || downloadingVersion !== null
-                                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                                : 'bg-slate-900 hover:bg-slate-800 text-white'
-                            }`}
-                        >
-                            Download
-                        </button>
+                        <button onClick={handleCustomDownload} disabled={!customPhpVersion || downloadingVersion !== null} className="px-4 py-2 rounded-lg text-sm font-medium bg-slate-900 hover:bg-slate-800 text-white disabled:bg-gray-200 disabled:text-gray-400">Download</button>
                     </div>
-                    <p className="text-[10px] text-slate-400 mt-2">
-                        Input specific version number (e.g., 8.1.0, 7.4.33). Will attempt to fetch from windows.php.net archives.
-                    </p>
                 </div>
              </div>
           </div>
@@ -566,9 +526,7 @@ export default function App() {
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
             </div>
             <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1">
-               {composerLogs.map((log, i) => (
-                 <div key={i} className="break-all">{log}</div>
-               ))}
+               {composerLogs.map((log, i) => (<div key={i} className="break-all">{log}</div>))}
                <div ref={(el) => el?.scrollIntoView({ behavior: "smooth" })}></div>
             </div>
           </div>
@@ -581,34 +539,28 @@ export default function App() {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
             <div className="p-6 border-b border-slate-100 flex justify-between items-start">
               <h3 className="text-xl font-bold text-slate-800">{selectedProject.name}</h3>
-              <button onClick={() => setIsDetailsOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <XCircle size={24} />
-              </button>
+              <button onClick={() => setIsDetailsOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
             </div>
             <div className="p-6">
               <div className="p-4 bg-slate-100 rounded-lg text-sm text-slate-600 mb-4">
-                <strong>Debug Info:</strong><br/>
-                Project Path: {selectedProject.path}<br/>
-                Port: {selectedProject.port}
+                <strong>Debug Info:</strong><br/> Project Path: {selectedProject.path}<br/> Port: {selectedProject.port}
               </div>
               <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
                   <span className="text-sm font-medium text-slate-700">PHP Version</span>
-                  <select 
-                    className="text-sm bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:border-indigo-500"
+                  <select className="text-sm bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:border-indigo-500"
                     value={selectedProject.phpVersion} 
-                    onChange={(e) => {
+                    onChange={async (e) => {
                         const newVersion = e.target.value;
-                        setSelectedProject({ ...selectedProject, phpVersion: newVersion });
-                        const updatedProjects = projects.map(p => 
-                            p.id === selectedProject.id ? { ...p, phpVersion: newVersion } : p
-                        );
-                        updateAndSave(updatedProjects);
+                        if (newVersion === selectedProject.phpVersion) return;
+                        const updatedProject = { ...selectedProject, phpVersion: newVersion };
+                        setSelectedProject(updatedProject);
+                        const updatedList = projects.map(p => p.id === selectedProject.id ? updatedProject : p);
+                        await updateAndSave(updatedList);
+                        await message(`Project updated to use: ${newVersion}.\nRestart the project to apply.`, {title: 'Updated', kind: 'info'});
                     }}
                   >
                     <option value="Global">Global (Default)</option>
-                    {installedPhp.length > 0 ? (
-                         installedPhp.map(v => <option key={v} value={v}>{v}</option>)
-                    ) : null}
+                    {installedPhp.map(v => <option key={v} value={v}>{v}</option>)}
                   </select>
               </div>
             </div>
