@@ -98,8 +98,6 @@ pub fn delete_service_folder(folder_name: String) -> Result<String, String> {
     Ok(format!("Deleted {}", folder_name))
 }
 
-// --- NEW COMMANDS FOR PROJECT MANAGEMENT ---
-
 #[tauri::command]
 pub fn delete_project_dir(path: String) -> Result<String, String> {
     let path_buf = PathBuf::from(&path);
@@ -108,8 +106,6 @@ pub fn delete_project_dir(path: String) -> Result<String, String> {
         return Err("Path does not exist".to_string());
     }
 
-    // Basic safety: don't delete short paths (roots/home)
-    // This prevents accidents like deleting "C:\" or "/Users/name"
     if let Some(parent) = path_buf.parent() {
         if parent.components().count() < 1 {
              return Err("Path is too close to root. Operation unsafe.".to_string());
@@ -130,4 +126,25 @@ pub fn check_projects_status(paths: Vec<String>) -> HashMap<String, bool> {
         status.insert(path, exists);
     }
     status
+}
+
+// --- NEW FRAMEWORK DETECTION ---
+
+#[tauri::command]
+pub fn detect_framework(path: String) -> String {
+    let p = PathBuf::from(&path);
+    
+    if p.join("artisan").exists() {
+        return "laravel".to_string();
+    }
+    
+    if p.join("wp-config.php").exists() || p.join("wp-settings.php").exists() {
+        return "wordpress".to_string();
+    }
+
+    if p.join("bin").join("console").exists() {
+        return "symfony".to_string();
+    }
+
+    "custom".to_string()
 }

@@ -3,8 +3,6 @@ use std::process::Command;
 use std::sync::Mutex;
 use tauri::State;
 
-// Shared state to hold the PIDs (Process IDs) of running services.
-// Key = service_id (e.g., "project-1-php"), Value = OS PID
 pub struct ServiceState {
     pub pids: Mutex<HashMap<String, u32>>,
 }
@@ -23,27 +21,37 @@ pub fn start_service(
     id: String,
     bin_path: String,
     args: Vec<String>,
+    cwd: Option<String>, // <-- Added cwd parameter
 ) -> Result<String, String> {
-    // 1. Lock the state to check running services
     let mut pids = state.pids.lock().map_err(|_| "Failed to lock state")?;
     
     if pids.contains_key(&id) {
         return Err(format!("Service '{}' is already running.", id));
     }
 
-    // 2. Spawn the process
-    // Note: In the future, we will capture stdout/stderr here for logs.
-    let child = Command::new(&bin_path)
-        .args(&args)
-        .spawn()
+    let mut command = Command::new(&bin_path);
+    command.args(&args);
+
+    // Set working directory if provided
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    
+    // Hide console window on Windows
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let child = command.spawn()
         .map_err(|e| format!("Failed to start {}: {}", bin_path, e))?;
 
     let pid = child.id();
-    
-    // 3. Store the PID
     pids.insert(id.clone(), pid);
     
-    println!("Started service: {} with PID: {}", id, pid);
+    println!("Started service: {} (PID: {})", id, pid);
     Ok(format!("Started {} (PID: {})", id, pid))
 }
 
@@ -52,10 +60,8 @@ pub fn stop_service(state: State<ServiceState>, id: String) -> Result<String, St
     let mut pids = state.pids.lock().map_err(|_| "Failed to lock state")?;
 
     if let Some(pid) = pids.remove(&id) {
-        // 4. Kill the process based on OS
         #[cfg(target_os = "windows")]
         {
-            // On Windows, "taskkill /F /PID" is reliable for external binaries
             let _ = Command::new("taskkill")
                 .args(["/F", "/PID", &pid.to_string()])
                 .output();
@@ -63,7 +69,6 @@ pub fn stop_service(state: State<ServiceState>, id: String) -> Result<String, St
 
         #[cfg(not(target_os = "windows"))]
         {
-            // On Mac/Linux, use standard kill
             let _ = Command::new("kill")
                 .arg(pid.to_string())
                 .output();

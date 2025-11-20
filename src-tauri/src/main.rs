@@ -15,7 +15,8 @@ mod terminal;
 use process_manager::{start_service, stop_service, ServiceState};
 use filesystem::{
     init_environment, get_services, get_service_bin_path, get_user_home, 
-    delete_service_folder, delete_project_dir, check_projects_status // <-- Added these
+    delete_service_folder, delete_project_dir, check_projects_status, 
+    detect_framework // <-- Added this
 };
 use downloader::download_service;
 use shim::{set_active_version, get_active_version};
@@ -51,8 +52,9 @@ fn main() {
             init_composer,
             create_laravel_project,
             open_project_terminal,
-            delete_project_dir, // <-- Registered
-            check_projects_status // <-- Registered
+            delete_project_dir,
+            check_projects_status,
+            detect_framework // <-- Registered
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
