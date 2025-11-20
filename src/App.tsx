@@ -6,7 +6,7 @@ import {
   Download, X
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, confirm } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { ServiceAPI } from './api/serviceControl';
 
@@ -96,8 +96,11 @@ export default function App() {
 
   // --- Delete Logic ---
   const handleDeletePhp = async (folderName: string) => {
-      // confirm() blocks execution. If Cancel is clicked, we return early.
-      if (!window.confirm(`Are you sure you want to delete ${folderName}? This cannot be undone.`)) {
+      const confirmed = await confirm(`Are you sure you want to delete ${folderName}? This cannot be undone.`, {
+        title: 'Confirm Deletion',
+        kind: 'warning'
+      });
+      if (!confirmed) {
           return;
       }
       
