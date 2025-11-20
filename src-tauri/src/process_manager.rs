@@ -21,7 +21,7 @@ pub fn start_service(
     id: String,
     bin_path: String,
     args: Vec<String>,
-    cwd: Option<String>, // <-- Added cwd parameter
+    cwd: Option<String>,
 ) -> Result<String, String> {
     let mut pids = state.pids.lock().map_err(|_| "Failed to lock state")?;
     
@@ -63,7 +63,7 @@ pub fn stop_service(state: State<ServiceState>, id: String) -> Result<String, St
         #[cfg(target_os = "windows")]
         {
             let _ = Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
+                .args(["/F", "/T", "/PID", &pid.to_string()]) 
                 .output();
         }
 
