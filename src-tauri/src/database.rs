@@ -10,38 +10,57 @@ fn get_home() -> Option<PathBuf> {
     return env::var("HOME").ok().map(PathBuf::from);
 }
 
+fn find_bin_path(base_dir: &PathBuf, exe_name: &str) -> Option<PathBuf> {
+    let direct = base_dir.join("bin").join(exe_name);
+    if direct.exists() { return Some(direct); }
+
+    if let Ok(entries) = fs::read_dir(base_dir) {
+        for entry in entries.flatten() {
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_dir() {
+                    let nested = entry.path().join("bin").join(exe_name);
+                    if nested.exists() { return Some(nested); }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 pub fn init_mysql(version_folder: String) -> Result<String, String> {
     let home = get_home().ok_or("Home not found")?;
     let base = home.join(".stackmanager");
+    let service_dir = base.join("services").join(&version_folder);
+
     let data_dir = base.join("data").join("mysql");
     
-    if data_dir.exists() {
+    if data_dir.join("mysql").exists() {
         return Ok("MariaDB already initialized".to_string());
     }
 
-    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-    
-    let source_data = base.join("services").join(&version_folder).join("data");
-    if source_data.exists() {
-        let _ = copy_dir_all(&source_data, &data_dir);
+    if !data_dir.exists() {
+        fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     }
 
-    Ok("MariaDB Data Directory Initialized".to_string())
-}
+    let install_db_exe = find_bin_path(&service_dir, "mysql_install_db.exe")
+        .ok_or(format!("Could not find mysql_install_db.exe in {}", version_folder))?;
 
-fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
+    println!("Initializing MariaDB with: {:?}", install_db_exe);
+
+    let output = Command::new(install_db_exe)
+        .arg(format!("--datadir={}", data_dir.to_string_lossy()))
+        .output()
+        .map_err(|e| format!("Failed to run init: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        // Often mysql_install_db prints help to stdout on error, check both
+        let out = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("MariaDB Init Failed: {} {}", err, out));
     }
-    Ok(())
+
+    Ok("MariaDB Initialized Successfully".to_string())
 }
 
 #[tauri::command]
