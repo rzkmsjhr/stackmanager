@@ -128,8 +128,6 @@ pub fn check_projects_status(paths: Vec<String>) -> HashMap<String, bool> {
     status
 }
 
-// --- NEW FRAMEWORK DETECTION ---
-
 #[tauri::command]
 pub fn detect_framework(path: String) -> String {
     let p = PathBuf::from(&path);
@@ -153,14 +151,22 @@ pub fn detect_framework(path: String) -> String {
 pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
     let dir = PathBuf::from(&bin_path_dir);
     let ini_path = dir.join("php.ini");
-
+    
+    // 1. Create php.ini if missing
     if !ini_path.exists() {
         let dev_ini = dir.join("php.ini-development");
         let prod_ini = dir.join("php.ini-production");
-        if dev_ini.exists() { fs::copy(&dev_ini, &ini_path).map_err(|e| e.to_string())?; } 
-        else if prod_ini.exists() { fs::copy(&prod_ini, &ini_path).map_err(|e| e.to_string())?; }
+        
+        if dev_ini.exists() {
+            fs::copy(&dev_ini, &ini_path).map_err(|e| format!("Failed to copy ini: {}", e))?;
+        } else if prod_ini.exists() {
+             fs::copy(&prod_ini, &ini_path).map_err(|e| format!("Failed to copy ini: {}", e))?;
+        } else {
+            return Ok("No template ini found, skipping configuration".to_string());
+        }
     }
 
+    // 2. Patch php.ini
     let content = fs::read_to_string(&ini_path).map_err(|e| e.to_string())?;
     let mut new_lines = Vec::new();
     let mut modified = false;
@@ -168,22 +174,25 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
     for line in content.lines() {
         let trimmed = line.trim();
         
+        // ENABLE EXTENSIONS (Added intl)
         if trimmed.starts_with(";extension=curl") || 
            trimmed.starts_with(";extension=fileinfo") || 
            trimmed.starts_with(";extension=mbstring") || 
            trimmed.starts_with(";extension=openssl") || 
            trimmed.starts_with(";extension=pdo_mysql") || 
            trimmed.starts_with(";extension=mysqli") ||
-           trimmed.starts_with(";extension=gd") || 
-           trimmed.starts_with(";extension=zip") { // Added zip
+           trimmed.starts_with(";extension=gd") ||
+           trimmed.starts_with(";extension=intl") || // <--- ADDED THIS
+           trimmed.starts_with(";extension=zip") {
+            
             new_lines.push(trimmed.replacen(";", "", 1));
             modified = true;
         } 
-        else if trimmed.starts_with(";extension_dir = \"ext\"") {
+        else if trimmed.starts_with(";extension_dir = \"ext\"") || trimmed.starts_with("; extension_dir = \"ext\"") {
              new_lines.push("extension_dir = \"ext\"".to_string());
              modified = true;
         }
-
+        // RESOURCE LIMITS
         else if trimmed.starts_with("post_max_size =") {
             new_lines.push("post_max_size = 64M".to_string());
             modified = true;
@@ -203,7 +212,7 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
 
     if modified {
         fs::write(&ini_path, new_lines.join("\n")).map_err(|e| e.to_string())?;
-        Ok("Configured php.ini".to_string())
+        Ok("Configured php.ini with Laravel extensions".to_string())
     } else {
         Ok("php.ini already configured".to_string())
     }

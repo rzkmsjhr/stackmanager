@@ -15,7 +15,9 @@ mod hosts;
 mod proxy;
 
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::Manager; 
+use std::fs::OpenOptions;
+use std::path::PathBuf;
 
 use process_manager::{start_service, stop_service, ServiceState};
 use filesystem::{
@@ -23,10 +25,10 @@ use filesystem::{
     delete_service_folder, delete_project_dir, check_projects_status, 
     detect_framework, prepare_php_ini
 };
-use downloader::download_service;
+use downloader::{download_service, install_adminer_file};
 use shim::{set_active_version, get_active_version};
 use store::{save_projects, load_projects};
-use database::init_mysql;
+use database::{init_mysql, change_mariadb_password};
 use composer::{init_composer, create_laravel_project};
 use terminal::open_project_terminal;
 use hosts::{add_host_entry, remove_host_entry};
@@ -35,6 +37,22 @@ use proxy::{start_proxy_server, register_proxy_route, ProxyState};
 #[tauri::command]
 fn open_in_browser(url: String) {
     let _ = open::that(url);
+}
+
+#[tauri::command]
+fn check_is_admin() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let hosts_path = PathBuf::from(r"C:\Windows\System32\drivers\etc\hosts");
+        match OpenOptions::new().write(true).append(true).open(&hosts_path) {
+            Ok(_) => true,
+            Err(_) => false
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        true 
+    }
 }
 
 fn main() {
@@ -59,12 +77,14 @@ fn main() {
             get_user_home,
             delete_service_folder,
             download_service,
+            install_adminer_file,
             set_active_version,
             get_active_version,
             open_in_browser,
             save_projects,
             load_projects,
             init_mysql,
+            change_mariadb_password,
             init_composer,
             create_laravel_project,
             open_project_terminal,
@@ -74,7 +94,8 @@ fn main() {
             prepare_php_ini,
             add_host_entry,
             remove_host_entry,
-            register_proxy_route
+            register_proxy_route,
+            check_is_admin
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri app")

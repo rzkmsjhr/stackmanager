@@ -1,76 +1,93 @@
-use std::process::Command;
-use std::path::PathBuf;
-use std::env;
 use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::env;
 
-fn get_paths() -> Option<(PathBuf, PathBuf)> {
+fn get_home() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
-    let home = env::var("USERPROFILE").ok().map(PathBuf::from)?;
+    return env::var("USERPROFILE").ok().map(PathBuf::from);
     #[cfg(not(target_os = "windows"))]
-    let home = env::var("HOME").ok().map(PathBuf::from)?;
-
-    let services = home.join(".stackmanager").join("services");
-    let data = home.join(".stackmanager").join("data").join("mysql");
-
-    Some((services, data))
+    return env::var("HOME").ok().map(PathBuf::from);
 }
 
 #[tauri::command]
 pub fn init_mysql(version_folder: String) -> Result<String, String> {
-    let (services_dir, data_dir) = get_paths().ok_or("Home dir not found")?;
+    let home = get_home().ok_or("Home not found")?;
+    let base = home.join(".stackmanager");
+    let data_dir = base.join("data").join("mysql");
     
-    let base_path = services_dir.join(&version_folder);
-    
-    let mut mysql_bin = base_path.join("bin");
-    
-    if !mysql_bin.exists() {
-        // Try nested: services/mariadb-ver/mariadb-ver/bin
-        let nested = base_path.join(&version_folder).join("bin");
-        if nested.exists() {
-            mysql_bin = nested;
-        } else {
-             // Fallback: Search for ANY folder that contains "bin"
-             if let Ok(entries) = fs::read_dir(&base_path) {
-                for entry in entries.flatten() {
-                    if let Ok(file_type) = entry.file_type() {
-                         if file_type.is_dir() {
-                             let candidate = entry.path().join("bin");
-                             if candidate.exists() {
-                                 mysql_bin = candidate;
-                                 break;
-                             }
-                         }
-                    }
-                }
-             }
-        }
-    }
-    
-    // Validate executable exists
-    let install_db_exe = mysql_bin.join("mysql_install_db.exe");
-    if !install_db_exe.exists() {
-        return Err(format!("Could not find mysql_install_db.exe at {:?}", install_db_exe));
-    }
-
-    // --- End Fix ---
-
-    if data_dir.exists() && data_dir.join("mysql").exists() {
-        return Ok("Database already initialized.".to_string());
+    if data_dir.exists() {
+        return Ok("MariaDB already initialized".to_string());
     }
 
     fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-
-    println!("Initializing MySQL from: {:?}", install_db_exe);
     
-    let output = Command::new(&install_db_exe)
-        .arg(format!("--datadir={}", data_dir.to_string_lossy()))
-        .output()
-        .map_err(|e| format!("Failed to execute init: {}", e))?;
+    let source_data = base.join("services").join(&version_folder).join("data");
+    if source_data.exists() {
+        let _ = copy_dir_all(&source_data, &data_dir);
+    }
+
+    Ok("MariaDB Data Directory Initialized".to_string())
+}
+
+fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn change_mariadb_password(bin_path: String, old_pass: String, new_pass: String) -> Result<String, String> {
+    let bin_dir = PathBuf::from(&bin_path);
+    let mysqladmin = if cfg!(target_os = "windows") {
+        bin_dir.join("mysqladmin.exe")
+    } else {
+        bin_dir.join("mysqladmin")
+    };
+
+    if !mysqladmin.exists() {
+        return Err(format!("mysqladmin not found at {:?}", mysqladmin));
+    }
+
+    let mut args = vec![
+        "-u".to_string(),
+        "root".to_string(),
+    ];
+
+    if !old_pass.is_empty() {
+        args.push(format!("-p{}", old_pass));
+    }
+
+    args.push("password".to_string());
+    args.push(new_pass);
+
+    let mut command = Command::new(mysqladmin);
+    command.args(&args);
+    
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command.output().map_err(|e| format!("Failed to run mysqladmin: {}", e))?;
 
     if output.status.success() {
-        Ok("MySQL Data Directory Initialized!".to_string())
+        Ok("Password updated successfully".to_string())
     } else {
         let err = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Init failed: {}", err))
+        if err.contains("Access denied") {
+            return Err("Access denied. Current password incorrect.".to_string());
+        }
+        Err(format!("Error: {}", err))
     }
 }

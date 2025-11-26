@@ -41,6 +41,12 @@ async fn handle_request(
     };
 
     if let Some(port) = target_port {
+        let (req_parts, req_body) = req.into_parts();
+        let req_bytes = match req_body.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(_) => return Ok(Response::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from("Bad Request Body"))).unwrap())
+        };
+
         let stream = match TcpStream::connect(format!("127.0.0.1:{}", port)).await {
             Ok(s) => s,
             Err(_) => return Ok(Response::builder()
@@ -60,28 +66,27 @@ async fn handle_request(
 
         // 2. Build Upstream Request
         let mut builder = Request::builder()
-            .method(req.method())
-            .uri(req.uri());
+            .method(req_parts.method)
+            .uri(req_parts.uri);
 
-        for (key, value) in req.headers() {
+        for (key, value) in req_parts.headers.iter() {
             builder = builder.header(key, value);
         }
 
-        // Explicitly set Host header to match browser
+        // Explicitly set Host header
         builder = builder.header("Host", &host_header);
 
-        let upstream_req: Request<Full<Bytes>> = builder
-            .body(Full::default()) 
+        // --- FIX: Send the collected bytes ---
+        let upstream_req = builder
+            .body(Full::new(req_bytes)) 
             .unwrap();
 
         if let Ok(res) = sender.send_request(upstream_req).await {
-            // FIX: Split response into Parts (Headers/Status) and Body
             let (parts, body) = res.into_parts();
             let body_bytes = body.collect().await.unwrap().to_bytes();
 
             let mut resp_builder = Response::builder().status(parts.status);
             
-            // Forward headers back to browser
             for (key, value) in parts.headers.iter() {
                 resp_builder = resp_builder.header(key, value);
             }
