@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Play, Square, Trash2, Info, 
-  Globe, Folder, Activity, Settings, 
+import {
+  Play, Square, Trash2, Info,
+  Globe, Folder, Activity, Settings,
   PlusCircle, CheckCircle, XCircle, Terminal, Database,
-  Download, X, Star, Monitor, AlertTriangle, RefreshCw
+  Download, X, Star, Monitor, AlertTriangle, RefreshCw, AlertOctagon
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open, confirm, message } from '@tauri-apps/plugin-dialog';
@@ -18,7 +18,7 @@ interface Project {
   path: string;
   framework: 'laravel' | 'symfony' | 'wordpress' | 'custom';
   domain: string;
-  port: number; 
+  port: number;
   status: ServiceStatus;
   phpVersion: string;
 }
@@ -35,16 +35,17 @@ const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [mysqlStatus, setMysqlStatus] = useState<ServiceStatus>('stopped');
-  const [userHome, setUserHome] = useState<string>(''); 
+  const [userHome, setUserHome] = useState<string>('');
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [missingPaths, setMissingPaths] = useState<Record<string, boolean>>({});
   const [composerLogs, setComposerLogs] = useState<string[]>([]);
   const [isInstalling, setIsInstalling] = useState(false);
   const [showPhpManager, setShowPhpManager] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [installedPhp, setInstalledPhp] = useState<string[]>([]);
-  const [customPhpVersion, setCustomPhpVersion] = useState(''); 
-  const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null); 
+  const [customPhpVersion, setCustomPhpVersion] = useState('');
+  const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null);
   const [currentGlobalPhp, setCurrentGlobalPhp] = useState<string>('Loading...');
 
   const phpPresets = [
@@ -61,27 +62,27 @@ export default function App() {
   };
 
   const checkProjectsStatus = async (currentProjects: Project[]) => {
-      if (currentProjects.length === 0) return;
-      try {
-          const paths = currentProjects.map(p => p.path);
-          const statusMap = await invoke<Record<string, boolean>>('check_projects_status', { paths });
-          setMissingPaths(statusMap);
-      } catch (e) { console.error(e); }
+    if (currentProjects.length === 0) return;
+    try {
+      const paths = currentProjects.map(p => p.path);
+      const statusMap = await invoke<Record<string, boolean>>('check_projects_status', { paths });
+      setMissingPaths(statusMap);
+    } catch (e) { console.error(e); }
   };
 
   useEffect(() => {
-    const interval = setInterval(() => { checkProjectsStatus(projects); }, 3000); 
+    const interval = setInterval(() => { checkProjectsStatus(projects); }, 3000);
     return () => clearInterval(interval);
   }, [projects]);
 
   const refreshData = async () => {
-      try {
-          const services = await invoke<string[]>('get_services');
-          const php = services.filter(s => s.startsWith('php-'));
-          setInstalledPhp(php);
-          const active = await invoke<string>('get_active_version', { service: 'php' });
-          setCurrentGlobalPhp(active);
-      } catch (e) { console.error(e); }
+    try {
+      const services = await invoke<string[]>('get_services');
+      const php = services.filter(s => s.startsWith('php-'));
+      setInstalledPhp(php);
+      const active = await invoke<string>('get_active_version', { service: 'php' });
+      setCurrentGlobalPhp(active);
+    } catch (e) { console.error(e); }
   };
 
   useEffect(() => {
@@ -102,91 +103,111 @@ export default function App() {
     init();
   }, []);
 
-  const handleSetGlobalPhp = async (folderName: string) => {
+  const confirmDelete = async (action: 'files' | 'list') => {
+    if (!projectToDelete) return;
+
+    if (action === 'files') {
       try {
-          await invoke('set_active_version', { service: 'php', versionFolder: folderName });
-          await message(`Global PHP version set to ${folderName}`, { title: 'Success', kind: 'info' });
-          refreshData();
-      } catch (e) {
-          await message(`Failed: ${e}`, { title: 'Error', kind: 'error' });
-      }
+        await invoke('delete_project_dir', { path: projectToDelete.path });
+        const updated = projects.filter(p => p.id !== projectToDelete.id);
+        updateAndSave(updated);
+        await message("Files deleted and project removed.", { title: "Deleted", kind: "info" });
+      } catch (e) { await message(`Failed to delete files: ${e}`, { title: "Error", kind: "error" }); }
+    } else {
+      const updated = projects.filter(p => p.id !== projectToDelete.id);
+      updateAndSave(updated);
+    }
+    setProjectToDelete(null);
+  };
+
+  const handleSetGlobalPhp = async (folderName: string) => {
+    try {
+      await invoke('set_active_version', { service: 'php', versionFolder: folderName });
+      await message(`Global PHP version set to ${folderName}`, { title: 'Success', kind: 'info' });
+      refreshData();
+    } catch (e) {
+      await message(`Failed: ${e}`, { title: 'Error', kind: 'error' });
+    }
   };
 
   const handleDeleteProject = async (project: Project) => {
-      const isMissing = missingPaths[project.path] === false;
-      if (isMissing) {
-          if (await confirm(`Remove "${project.name}"?`, { title: 'Remove', kind: 'info' })) {
-              const updated = projects.filter(p => p.id !== project.id);
-              updateAndSave(updated);
-          }
-          return;
+    const isMissing = missingPaths[project.path] === false;
+    if (isMissing) {
+      if (await confirm(`Remove "${project.name}"?`, { title: 'Remove', kind: 'info' })) {
+        const updated = projects.filter(p => p.id !== project.id);
+        updateAndSave(updated);
       }
-      const choice = await confirm(
-          `Delete "${project.name}"?\n\nClick 'Ok' to DELETE FILES.\nClick 'Cancel' to abort.`, 
-          { title: 'Delete Files?', kind: 'warning', okLabel: 'Delete Files', cancelLabel: 'Cancel' }
-      );
-      if (choice) {
-           try {
-               await invoke('delete_project_dir', { path: project.path });
-               const updated = projects.filter(p => p.id !== project.id);
-               updateAndSave(updated);
-               await message("Project deleted.", { title: "Deleted", kind: "info" });
-           } catch (e) { await message(`Failed: ${e}`, { title: "Error", kind: "error" }); }
-      }
+      return;
+    }
+    const choice = await confirm(
+      `Delete "${project.name}"?\n\nClick 'Ok' to DELETE FILES.\nClick 'Cancel' to abort.`,
+      { title: 'Delete Files?', kind: 'warning', okLabel: 'Delete Files', cancelLabel: 'Cancel' }
+    );
+    if (choice) {
+      try {
+        await invoke('delete_project_dir', { path: project.path });
+        const updated = projects.filter(p => p.id !== project.id);
+        updateAndSave(updated);
+        await message("Project deleted.", { title: "Deleted", kind: "info" });
+      } catch (e) { await message(`Failed: ${e}`, { title: "Error", kind: "error" }); }
+    }
   };
 
   const handleReAddFolder = async (project: Project) => {
-      try {
-          const selected = await open({ directory: true, multiple: false, title: "Locate Project Folder" });
-          if (selected && typeof selected === 'string') {
-              const updatedProject = { ...project, path: selected, status: 'stopped' as ServiceStatus };
-              const updatedList = projects.map(p => p.id === project.id ? updatedProject : p);
-              updateAndSave(updatedList);
-          }
-      } catch (e) { console.error(e); }
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "Locate Project Folder" });
+      if (selected && typeof selected === 'string') {
+        const updatedProject = { ...project, path: selected, status: 'stopped' as ServiceStatus };
+        const updatedList = projects.map(p => p.id === project.id ? updatedProject : p);
+        updateAndSave(updatedList);
+      }
+    } catch (e) { console.error(e); }
   };
 
   const handleDownloadPhp = async (name: string, url: string) => {
-      setDownloadingVersion(name);
-      try {
-          await invoke('download_service', { name, url });
-          await message(`${name} downloaded!`, { title: 'Success', kind: 'info' });
-          refreshData(); 
-      } catch (e) { await message(`Failed: ${e}`, { title: 'Error', kind: 'error' }); } 
-      finally { setDownloadingVersion(null); }
+    setDownloadingVersion(name);
+    try {
+      await invoke('download_service', { name, url });
+      await message(`${name} downloaded!`, { title: 'Success', kind: 'info' });
+      refreshData();
+    } catch (e) { await message(`Failed: ${e}`, { title: 'Error', kind: 'error' }); }
+    finally { setDownloadingVersion(null); }
   };
 
   const handleCustomDownload = () => {
-      if (!customPhpVersion) return;
-      const parts = customPhpVersion.split('.');
-      if (parts.length < 2) { alert("Invalid version"); return; }
-      const major = parseInt(parts[0]); const minor = parseInt(parts[1]);
-      let compiler = "vs16"; let arch = "x64";
-      if (major === 5) { if (minor <= 4) { compiler = "VC9"; arch = "x86"; } else { compiler = "vc11"; } } 
-      else if (major === 7) { if (minor <= 1) compiler = "vc14"; else compiler = "vc15"; }
-      const folderName = `php-${customPhpVersion}-Win32-${compiler}-${arch}`;
-      const url = `https://windows.php.net/downloads/releases/archives/${folderName}.zip`;
-      if (confirm(`Download ${folderName}?`)) { handleDownloadPhp(folderName, url); }
+    if (!customPhpVersion) return;
+    const parts = customPhpVersion.split('.');
+    if (parts.length < 2) { alert("Invalid version"); return; }
+    const major = parseInt(parts[0]); const minor = parseInt(parts[1]);
+    let compiler = "vs16"; let arch = "x64";
+    if (major === 5) { if (minor <= 4) { compiler = "VC9"; arch = "x86"; } else { compiler = "vc11"; } }
+    else if (major === 7) { if (minor <= 1) compiler = "vc14"; else compiler = "vc15"; }
+    const folderName = `php-${customPhpVersion}-Win32-${compiler}-${arch}`;
+    const url = `https://windows.php.net/downloads/releases/archives/${folderName}.zip`;
+    if (confirm(`Download ${folderName}?`)) { handleDownloadPhp(folderName, url); }
   };
 
   const openProjectTerminal = async (project: Project) => {
-      try {
-          let phpPath = `${userHome}\\.stackmanager\\bin\\php`;
-          if (project.phpVersion && project.phpVersion !== 'Global') {
-              phpPath = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion });
-          }
-          await invoke('open_project_terminal', { cwd: project.path, phpBinPath: phpPath });
-      } catch (e) { await message(`Failed: ${e}`, { title: "Error", kind: "error" }); }
+    try {
+      let phpPath = `${userHome}\\.stackmanager\\bin\\php`;
+      if (project.phpVersion && project.phpVersion !== 'Global') {
+        phpPath = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion });
+      }
+      await invoke('open_project_terminal', { cwd: project.path, phpBinPath: phpPath });
+    } catch (e) { await message(`Failed: ${e}`, { title: "Error", kind: "error" }); }
   };
 
   const toggleProjectService = async (project: Project) => {
+    // 1. Check if folder exists on disk
     if (missingPaths[project.path] === false) {
-        await message("Project folder is missing.", { title: "Error", kind: "error" });
-        return;
+      await message("Project folder is missing from disk.", { title: "Error", kind: "error" });
+      return;
     }
 
     const backendId = `proj_${project.id}`;
     const newStatus = project.status === 'running' ? 'stopped' : 'running';
+
+    // Optimistic UI Update
     const updatedList = projects.map(p => p.id === project.id ? { ...p, status: newStatus === 'running' ? 'starting' : 'stopped' } : p);
     setProjects(updatedList);
 
@@ -194,30 +215,46 @@ export default function App() {
       if (newStatus === 'running') {
         let home = userHome || await invoke<string>('get_user_home');
         if (!userHome) setUserHome(home);
-        
-        let phpPath = `${home}\\.stackmanager\\bin\\php\\php.exe`;
+
+        let phpBinDir = `${home}\\.stackmanager\\bin\\php`;
+        let phpPath = `${phpBinDir}\\php.exe`;
+
         if (project.phpVersion && project.phpVersion !== 'Global') {
-             try {
-                 const versionBin = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion });
-                 phpPath = `${versionBin}\\php.exe`;
-             } catch (e) { console.warn("Using global PHP."); }
+          try {
+            phpBinDir = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion });
+            phpPath = `${phpBinDir}\\php.exe`;
+          } catch (e) {
+            console.warn("Specific PHP version not found. Falling back to Global.", e);
+          }
+        }
+
+        try {
+          await invoke('prepare_php_ini', { binPathDir: phpBinDir });
+        } catch (e) {
+          console.warn("Warning: Failed to auto-configure php.ini. Project might crash if extensions are missing.", e);
+        }
+
+        if (project.domain && project.domain !== 'localhost') {
+          try {
+            await invoke('register_proxy_route', { domain: project.domain, port: project.port });
+          } catch (e) {
+            console.warn("Proxy registration failed:", e);
+          }
         }
 
         let args = [];
-        // DETECT FRAMEWORK EXECUTION LOGIC
         if (project.framework === 'laravel') {
-             args = ["artisan", "serve", "--host=127.0.0.1", `--port=${project.port}`];
+          args = ["artisan", "serve", "--host=127.0.0.1", `--port=${project.port}`];
         } else {
-             // Default / Custom PHP
-             const docRoot = project.framework === 'wordpress' ? project.path : (project.framework === 'symfony' ? `${project.path}/public` : project.path);
-             args = ["-S", `127.0.0.1:${project.port}`, "-t", docRoot];
+          const docRoot = project.framework === 'wordpress' ? project.path : (project.framework === 'symfony' ? `${project.path}/public` : project.path);
+          args = ["-S", `127.0.0.1:${project.port}`, "-t", docRoot];
         }
 
         await ServiceAPI.start({
-           id: backendId,
-           binPath: phpPath,
-           args: args,
-           cwd: project.path // Run inside project folder
+          id: backendId,
+          binPath: phpPath,
+          args: args,
+          cwd: project.path // Run inside project folder
         });
 
         setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'running' } : p));
@@ -229,11 +266,12 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'error' } : p));
+      await message(`Error: ${err}`, { title: "Service Error", kind: "error" });
     }
   };
 
-    const toggleMySQL = async () => {
-    const folderName = "mariadb-10.11.6-winx64"; 
+  const toggleMySQL = async () => {
+    const folderName = "mariadb-10.11.6-winx64";
     const serviceId = "global_mysql";
     if (mysqlStatus === 'running') {
       setMysqlStatus('stopped'); await ServiceAPI.stop(serviceId);
@@ -254,20 +292,20 @@ export default function App() {
       const selected = await open({ directory: true, multiple: false, title: "Select Project Folder" });
       if (selected && typeof selected === 'string') {
         const name = selected.split(/[\\/]/).pop() || "Untitled Project";
-        
+
         // Auto-Detect Framework
         const detectedFramework = await invoke<string>('detect_framework', { path: selected });
         console.log("Detected:", detectedFramework);
 
         const newProj: Project = {
-            id: crypto.randomUUID(),
-            name: name,
-            path: selected,
-            framework: detectedFramework as any,
-            domain: 'localhost',
-            port: 8000 + projects.length + 1,
-            status: 'stopped',
-            phpVersion: 'Global'
+          id: crypto.randomUUID(),
+          name: name,
+          path: selected,
+          framework: detectedFramework as any,
+          domain: 'localhost',
+          port: 8000 + projects.length + 1,
+          status: 'stopped',
+          phpVersion: 'Global'
         };
         updateAndSave([...projects, newProj]);
       }
@@ -290,14 +328,14 @@ export default function App() {
       setIsInstalling(false);
 
       const newProj: Project = {
-          id: crypto.randomUUID(),
-          name: projectName,
-          path: newPath,
-          framework: 'laravel',
-          domain: 'localhost',
-          port: 8000 + projects.length + 1,
-          status: 'stopped',
-          phpVersion: 'Global'
+        id: crypto.randomUUID(),
+        name: projectName,
+        path: newPath,
+        framework: 'laravel',
+        domain: 'localhost',
+        port: 8000 + projects.length + 1,
+        status: 'stopped',
+        phpVersion: 'Global'
       };
       updateAndSave([...projects, newProj]);
       await message("Laravel Project Created!", { title: "Success", kind: "info" });
@@ -318,44 +356,71 @@ export default function App() {
     }
   };
 
+  const handleEditDomain = async (project: Project) => {
+    const newDomain = prompt("Enter custom domain (e.g., blog.test):", project.domain);
+    if (newDomain && newDomain !== project.domain) {
+      if (newDomain.endsWith('.dev')) {
+        alert("Warning: .dev domains require HTTPS. Use .test for simpler local development.");
+      }
+
+      try {
+        await invoke('add_host_entry', { domain: newDomain });
+
+        const updated = { ...project, domain: newDomain };
+        const list = projects.map(p => p.id === project.id ? updated : p);
+        updateAndSave(list);
+        await message(`Domain ${newDomain} mapped!`, { title: "Success", kind: "info" });
+      } catch (e) {
+        await message(`Failed to map domain. Run App as Administrator.\nError: ${e}`, { title: "Permission Error", kind: "error" });
+      }
+    }
+  };
+
+  const openProjectUrl = (project: Project) => {
+    const url = (project.domain && project.domain !== 'localhost')
+      ? `http://${project.domain}`
+      : `http://localhost:${project.port}`;
+    invoke('open_in_browser', { url });
+  };
+
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
       <div className="w-64 bg-white border-r border-slate-200 p-6 flex flex-col">
         <h1 className="text-xl font-bold text-indigo-600">StackManager</h1>
         <p className="text-xs text-slate-400 mb-6">v0.2.0 Beta</p>
         <div className="mb-6">
-            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Global Stack</h3>
-            <div className="mb-2 flex items-center justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100">
-                <div className="flex items-center gap-3">
-                    <div className="p-2 bg-indigo-200 text-indigo-700 rounded"> <Monitor size={16} /> </div>
-                    <div>
-                        <div className="text-sm font-bold text-indigo-900">Global PHP</div>
-                        <div className="text-[10px] text-indigo-500 truncate w-24" title={currentGlobalPhp}>{currentGlobalPhp}</div>
-                    </div>
-                </div>
+          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Global Stack</h3>
+          <div className="mb-2 flex items-center justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-200 text-indigo-700 rounded"> <Monitor size={16} /> </div>
+              <div>
+                <div className="text-sm font-bold text-indigo-900">Global PHP</div>
+                <div className="text-[10px] text-indigo-500 truncate w-24" title={currentGlobalPhp}>{currentGlobalPhp}</div>
+              </div>
             </div>
-            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                <div className="flex items-center gap-3">
-                    <div className="p-2 bg-blue-100 text-blue-600 rounded"> <Database size={16} /> </div>
-                    <div><div className="text-sm font-medium">MariaDB</div><div className="text-[10px] text-slate-400">Port 3306</div></div>
-                </div>
-                <button onClick={toggleMySQL} className={`p-1.5 rounded transition-colors ${mysqlStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>
-                    {mysqlStatus === 'running' ? <Square size={14} fill="currentColor"/> : <Play size={14} fill="currentColor"/>}
-                </button>
+          </div>
+          <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-100 text-blue-600 rounded"> <Database size={16} /> </div>
+              <div><div className="text-sm font-medium">MariaDB</div><div className="text-[10px] text-slate-400">Port 3306</div></div>
             </div>
+            <button onClick={toggleMySQL} className={`p-1.5 rounded transition-colors ${mysqlStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>
+              {mysqlStatus === 'running' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+            </button>
+          </div>
         </div>
         <div className="space-y-2 border-t border-slate-100 pt-4">
           <p className="text-xs text-slate-400 mb-2">Tools</p>
           <button onClick={() => setShowPhpManager(true)} className="w-full text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 p-2 rounded text-left flex items-center gap-2">
             <Settings size={14} /> Manage PHP Versions
           </button>
-          <button onClick={() => invoke('download_service', {name: 'mariadb-10.11.6-winx64', url: 'https://archive.mariadb.org/mariadb-10.11.6/winx64-packages/mariadb-10.11.6-winx64.zip'}).then(() => message("MariaDB Downloaded!", {title:"Success", kind:"info"}))} className="w-full text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 p-2 rounded text-left flex items-center gap-2">
+          <button onClick={() => invoke('download_service', { name: 'mariadb-10.11.6-winx64', url: 'https://archive.mariadb.org/mariadb-10.11.6/winx64-packages/mariadb-10.11.6-winx64.zip' }).then(() => message("MariaDB Downloaded!", { title: "Success", kind: "info" }))} className="w-full text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 p-2 rounded text-left flex items-center gap-2">
             <Download size={14} /> Get MariaDB
           </button>
         </div>
         <div className="mt-auto space-y-2">
-             <button onClick={createLaravel} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 py-2 px-4 rounded-lg transition-colors text-sm font-medium border border-red-200"><PlusCircle size={16} /> New Laravel App</button>
-             <button onClick={addNewProject} className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg transition-colors text-sm font-medium shadow-lg shadow-indigo-500/20"><PlusCircle size={16} /> Import Project</button>
+          <button onClick={createLaravel} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 py-2 px-4 rounded-lg transition-colors text-sm font-medium border border-red-200"><PlusCircle size={16} /> New Laravel App</button>
+          <button onClick={addNewProject} className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg transition-colors text-sm font-medium shadow-lg shadow-indigo-500/20"><PlusCircle size={16} /> Import Project</button>
         </div>
       </div>
 
@@ -364,28 +429,37 @@ export default function App() {
         <div className="bg-white rounded-xl shadow-sm border border-slate-200">
           {projects.length === 0 && <div className="p-8 text-center text-slate-400">No projects yet.</div>}
           {projects.map((project) => {
-             const isMissing = missingPaths[project.path] === false;
-             return (
-                <div key={project.id} className={`relative p-4 border-b last:border-0 ${isMissing ? 'bg-red-50/50' : ''}`}>
-                  {isMissing && (
-                      <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-between px-6 backdrop-blur-[1px]">
-                          <div className="flex items-center gap-3 text-red-600"><AlertTriangle size={20} /><div><p className="font-bold text-sm">Project Folder Missing</p><p className="text-xs text-red-400">{project.path}</p></div></div>
-                          <div className="flex gap-2"><button onClick={() => handleDeleteProject(project)} className="px-3 py-1.5 bg-red-100 text-red-700 text-xs font-bold rounded hover:bg-red-200">Remove</button><button onClick={() => handleReAddFolder(project)} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded hover:bg-indigo-700 flex items-center gap-1"><RefreshCw size={12}/> Locate Folder</button></div>
-                      </div>
-                  )}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4"><FrameworkIcon framework={project.framework} /><div><h3 className="font-medium text-slate-800">{project.name}</h3><div className="flex items-center gap-2 text-xs text-slate-400"><Folder size={12} /> {project.path}</div></div></div>
-                    <div className="flex items-center gap-4">
-                        <button onClick={() => openProjectTerminal(project)} className="px-3 py-1.5 bg-slate-800 text-white text-xs rounded flex items-center gap-1 hover:bg-slate-700 transition" title="Terminal"><Terminal size={12} /> Terminal</button>
-                        <a href="#" onClick={(e) => { e.preventDefault(); invoke('open_in_browser', { url: `http://localhost:${project.port}` }); }} className="text-indigo-600 text-sm hover:underline flex items-center gap-1"><Globe size={14} /> localhost:{project.port}</a>
-                        <StatusIndicator status={project.status} />
-                        <button onClick={() => toggleProjectService(project)} className={`p-2 rounded-full transition-colors ${project.status === 'running' ? 'bg-red-50 text-red-500 hover:bg-red-100' : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100'}`}>{project.status === 'running' ? <Square size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}</button>
-                        <button onClick={() => openDetails(project)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"><Info size={18} /></button>
-                        <button onClick={() => handleDeleteProject(project)} className="p-2 text-red-300 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 size={18} /></button>
-                    </div>
+            const isMissing = missingPaths[project.path] === false;
+            return (
+              <div key={project.id} className={`relative p-4 border-b last:border-0 ${isMissing ? 'bg-red-50/50' : ''}`}>
+                {isMissing && (
+                  <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-between px-6 backdrop-blur-[1px]">
+                    <div className="flex items-center gap-3 text-red-600"><AlertTriangle size={20} /><div><p className="font-bold text-sm">Project Folder Missing</p><p className="text-xs text-red-400">{project.path}</p></div></div>
+                    <div className="flex gap-2"><button onClick={() => handleDeleteProject(project)} className="px-3 py-1.5 bg-red-100 text-red-700 text-xs font-bold rounded hover:bg-red-200">Remove</button><button onClick={() => handleReAddFolder(project)} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded hover:bg-indigo-700 flex items-center gap-1"><RefreshCw size={12} /> Locate Folder</button></div>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4"><FrameworkIcon framework={project.framework} /><div><h3 className="font-medium text-slate-800">{project.name}</h3><div className="flex items-center gap-2 text-xs text-slate-400"><Folder size={12} /> {project.path}</div></div></div>
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => handleEditDomain(project)} className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 text-slate-600">
+                      {project.domain !== 'localhost' ? project.domain : 'Set Domain'}
+                    </button>
+                    <button onClick={() => openProjectTerminal(project)} className="px-3 py-1.5 bg-slate-800 text-white text-xs rounded flex items-center gap-1 hover:bg-slate-700 transition" title="Terminal"><Terminal size={12} /> Terminal</button>
+                    <a href="#" onClick={(e) => { e.preventDefault(); openProjectUrl(project); }} className="text-indigo-600 text-sm hover:underline flex items-center gap-1">
+                      <Globe size={14} />
+                      {(project.domain && project.domain !== 'localhost') ? project.domain : `localhost:${project.port}`}
+                    </a>
+                    <StatusIndicator status={project.status} />
+                    <button onClick={() => toggleProjectService(project)} className={`p-2 rounded-full ${project.status === 'running' ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-500'}`}>
+                      {project.status === 'running' ? <Square size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+                    </button> <button onClick={() => openDetails(project)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"><Info size={18} /></button>
+                    <button onClick={() => setProjectToDelete(project)} className="p-2 text-red-300 hover:text-red-600 hover:bg-red-50 rounded-md">
+                      <Trash2 size={18} />
+                    </button>
                   </div>
                 </div>
-             );
+              </div>
+            );
           })}
         </div>
       </div>
@@ -393,37 +467,37 @@ export default function App() {
       {showPhpManager && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-10 backdrop-blur-sm">
           <div className="bg-white w-full max-w-2xl rounded-xl shadow-2xl border border-slate-200 flex flex-col max-h-[80vh]">
-             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><div className="p-2 bg-purple-100 text-purple-600 rounded-lg"><Settings size={20}/></div> PHP Version Manager</h3>
-                <button onClick={() => setShowPhpManager(false)} className="text-slate-400 hover:text-slate-600"><X size={24}/></button>
-             </div>
-             <div className="p-6 overflow-y-auto space-y-6">
-                <div>
-                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Installed Versions</h4>
-                    <div className="grid grid-cols-1 gap-2">
-                        {installedPhp.map(v => (
-                            <div key={v} className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-100 rounded-lg group">
-                                <span className="font-medium text-emerald-800">{v}</span>
-                                <div className="flex items-center gap-2"><button onClick={() => handleSetGlobalPhp(v)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded flex items-center gap-1"><Star size={12} /> Set Global</button><button onClick={() => handleDeletePhp(v)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-100 rounded transition-colors"><Trash2 size={14} /></button></div>
-                            </div>
-                        ))}
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><div className="p-2 bg-purple-100 text-purple-600 rounded-lg"><Settings size={20} /></div> PHP Version Manager</h3>
+              <button onClick={() => setShowPhpManager(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-6">
+              <div>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Installed Versions</h4>
+                <div className="grid grid-cols-1 gap-2">
+                  {installedPhp.map(v => (
+                    <div key={v} className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-100 rounded-lg group">
+                      <span className="font-medium text-emerald-800">{v}</span>
+                      <div className="flex items-center gap-2"><button onClick={() => handleSetGlobalPhp(v)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded flex items-center gap-1"><Star size={12} /> Set Global</button><button onClick={() => handleDeletePhp(v)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-100 rounded transition-colors"><Trash2 size={14} /></button></div>
                     </div>
+                  ))}
                 </div>
-                <div className="pt-4 border-t border-slate-100">
-                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Download Custom Version</h4>
-                    <div className="flex gap-2"><input type="text" placeholder="e.g. 8.1.0" className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-4 py-2 text-sm" value={customPhpVersion} onChange={(e) => setCustomPhpVersion(e.target.value)}/><button onClick={handleCustomDownload} className="px-4 py-2 rounded-lg text-sm font-medium bg-slate-900 hover:bg-slate-800 text-white">Download</button></div>
-                </div>
-             </div>
+              </div>
+              <div className="pt-4 border-t border-slate-100">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Download Custom Version</h4>
+                <div className="flex gap-2"><input type="text" placeholder="e.g. 8.1.0" className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-4 py-2 text-sm" value={customPhpVersion} onChange={(e) => setCustomPhpVersion(e.target.value)} /><button onClick={handleCustomDownload} className="px-4 py-2 rounded-lg text-sm font-medium bg-slate-900 hover:bg-slate-800 text-white">Download</button></div>
+              </div>
+            </div>
           </div>
         </div>
       )}
 
       {isInstalling && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-10">
-            <div className="bg-slate-900 text-slate-200 w-full max-w-3xl rounded-xl shadow-2xl border border-slate-700 flex flex-col h-[500px]">
-            <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800 rounded-t-xl"><h3 className="font-bold flex items-center gap-2"><Terminal size={18}/> Installing Laravel...</h3><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div></div>
+          <div className="bg-slate-900 text-slate-200 w-full max-w-3xl rounded-xl shadow-2xl border border-slate-700 flex flex-col h-[500px]">
+            <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800 rounded-t-xl"><h3 className="font-bold flex items-center gap-2"><Terminal size={18} /> Installing Laravel...</h3><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div></div>
             <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1">{composerLogs.map((log, i) => (<div key={i} className="break-all">{log}</div>))}<div ref={(el) => el?.scrollIntoView({ behavior: "smooth" })}></div></div>
-            </div>
+          </div>
         </div>
       )}
 
@@ -433,23 +507,53 @@ export default function App() {
             <div className="p-6 border-b border-slate-100 flex justify-between items-start"><h3 className="text-xl font-bold text-slate-800">{selectedProject.name}</h3><button onClick={() => setIsDetailsOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button></div>
             <div className="p-6">
               <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
-                  <span className="text-sm font-medium text-slate-700">PHP Version</span>
-                  <select className="text-sm bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:border-indigo-500" value={selectedProject.phpVersion} 
-                    onChange={async (e) => {
-                        const newVersion = e.target.value;
-                        const updatedProject = { ...selectedProject, phpVersion: newVersion };
-                        setSelectedProject(updatedProject);
-                        const updatedList = projects.map(p => p.id === selectedProject.id ? updatedProject : p);
-                        await updateAndSave(updatedList);
-                    }}>
-                    <option value="Global">Global (Default)</option>
-                    {installedPhp.map(v => <option key={v} value={v}>{v}</option>)}
-                  </select>
+                <span className="text-sm font-medium text-slate-700">PHP Version</span>
+                <select className="text-sm bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:border-indigo-500" value={selectedProject.phpVersion}
+                  onChange={async (e) => {
+                    const newVersion = e.target.value;
+                    const updatedProject = { ...selectedProject, phpVersion: newVersion };
+                    setSelectedProject(updatedProject);
+                    const updatedList = projects.map(p => p.id === selectedProject.id ? updatedProject : p);
+                    await updateAndSave(updatedList);
+                  }}>
+                  <option value="Global">Global (Default)</option>
+                  {installedPhp.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {projectToDelete && (
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-6 text-center">
+              <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertOctagon size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-800 mb-2">Delete {projectToDelete.name}?</h3>
+              <p className="text-slate-500 text-sm mb-6">
+                You can remove this project from the list, or permanently delete the files from your computer.
+              </p>
+
+              <div className="flex flex-col gap-3">
+                <button onClick={() => confirmDelete('files')} className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition flex items-center justify-center gap-2">
+                  <Trash2 size={18} /> Delete Files & Remove
+                </button>
+                <button onClick={() => confirmDelete('list')} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition">
+                  Remove from List Only
+                </button>
+                <button onClick={() => setProjectToDelete(null)} className="mt-2 text-slate-400 hover:text-slate-600 text-sm font-medium">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+
     </div>
   );
 }

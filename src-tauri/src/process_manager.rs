@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;
+use std::path::Path;
+use std::env;
 use tauri::State;
 
 pub struct ServiceState {
@@ -32,9 +34,18 @@ pub fn start_service(
     let mut command = Command::new(&bin_path);
     command.args(&args);
 
-    // Set working directory if provided
     if let Some(dir) = cwd {
         command.current_dir(dir);
+    }
+
+    if let Some(parent_dir) = Path::new(&bin_path).parent() {
+        let current_path = env::var("PATH").unwrap_or_default();
+        let new_path = if cfg!(target_os = "windows") {
+            format!("{};{}", parent_dir.to_string_lossy(), current_path)
+        } else {
+            format!("{}:{}", parent_dir.to_string_lossy(), current_path)
+        };
+        command.env("PATH", new_path);
     }
     
     // Hide console window on Windows

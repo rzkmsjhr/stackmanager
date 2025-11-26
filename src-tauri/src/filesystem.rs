@@ -148,3 +148,61 @@ pub fn detect_framework(path: String) -> String {
 
     "custom".to_string()
 }
+
+#[tauri::command]
+pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
+    let dir = PathBuf::from(&bin_path_dir);
+    let ini_path = dir.join("php.ini");
+    
+    // 1. Create php.ini if missing by copying development template
+    if !ini_path.exists() {
+        let dev_ini = dir.join("php.ini-development");
+        let prod_ini = dir.join("php.ini-production");
+        
+        if dev_ini.exists() {
+            fs::copy(&dev_ini, &ini_path).map_err(|e| format!("Failed to copy ini: {}", e))?;
+        } else if prod_ini.exists() {
+             fs::copy(&prod_ini, &ini_path).map_err(|e| format!("Failed to copy ini: {}", e))?;
+        } else {
+            return Ok("No template ini found, skipping configuration".to_string());
+        }
+    }
+
+    // 2. Read and Patch php.ini
+    let content = fs::read_to_string(&ini_path).map_err(|e| e.to_string())?;
+    let mut new_lines = Vec::new();
+    let mut modified = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        
+        // List of extensions to enable for Laravel/Modern PHP
+        if trimmed.starts_with(";extension=curl") || 
+           trimmed.starts_with(";extension=fileinfo") || 
+           trimmed.starts_with(";extension=mbstring") || 
+           trimmed.starts_with(";extension=openssl") || 
+           trimmed.starts_with(";extension=pdo_mysql") || 
+           trimmed.starts_with(";extension=mysqli") ||
+           trimmed.starts_with(";extension=gd") {
+            
+            // Remove the semicolon to enable
+            new_lines.push(trimmed.replacen(";", "", 1));
+            modified = true;
+        } 
+        // Enable extension directory for Windows
+        else if trimmed.starts_with(";extension_dir = \"ext\"") || trimmed.starts_with("; extension_dir = \"ext\"") {
+             new_lines.push("extension_dir = \"ext\"".to_string());
+             modified = true;
+        }
+        else {
+            new_lines.push(line.to_string());
+        }
+    }
+
+    if modified {
+        fs::write(&ini_path, new_lines.join("\n")).map_err(|e| e.to_string())?;
+        Ok("Configured php.ini with Laravel extensions".to_string())
+    } else {
+        Ok("php.ini already configured".to_string())
+    }
+}
