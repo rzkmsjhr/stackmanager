@@ -11,8 +11,11 @@ mod store;
 mod database;
 mod composer;
 mod terminal;
-mod hosts;
+mod hosts; 
 mod proxy;
+
+use std::sync::Arc;
+use tauri::Manager;
 
 use process_manager::{start_service, stop_service, ServiceState};
 use filesystem::{
@@ -28,7 +31,6 @@ use composer::{init_composer, create_laravel_project};
 use terminal::open_project_terminal;
 use hosts::{add_host_entry, remove_host_entry};
 use proxy::{start_proxy_server, register_proxy_route, ProxyState};
-use std::sync::Arc;
 
 #[tauri::command]
 fn open_in_browser(url: String) {
@@ -38,6 +40,7 @@ fn open_in_browser(url: String) {
 fn main() {
     let proxy_state = Arc::new(ProxyState::new());
     let proxy_state_clone = proxy_state.clone();
+    let service_state = ServiceState::new();
 
     tauri::async_runtime::spawn(async move {
         start_proxy_server(proxy_state_clone).await;
@@ -45,7 +48,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ServiceState::new())
+        .manage(service_state)
         .manage(proxy_state)
         .invoke_handler(tauri::generate_handler![
             start_service, 
@@ -68,11 +71,27 @@ fn main() {
             delete_project_dir,
             check_projects_status,
             detect_framework,
+            prepare_php_ini,
             add_host_entry,
             remove_host_entry,
-            register_proxy_route,
-            prepare_php_ini
+            register_proxy_route
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error building tauri app")
+        .run(|app_handle, event| {
+            match event {
+                tauri::RunEvent::ExitRequested { .. } => {
+                    let state = app_handle.state::<ServiceState>();
+                    let mut pids = state.pids.lock().unwrap();
+                    for (id, pid) in pids.iter() {
+                        println!("Killing service {} (PID: {}) on exit", id, pid);
+                        #[cfg(target_os = "windows")]
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/F", "/T", "/PID", &pid.to_string()])
+                            .output();
+                    }
+                }
+                _ => {}
+            }
+        });
 }

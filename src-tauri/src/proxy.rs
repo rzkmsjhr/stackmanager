@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
-use http_body_util::{Full, BodyExt}; // BodyExt is needed for .collect()
+use http_body_util::{Full, BodyExt}; 
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -27,14 +27,17 @@ async fn handle_request(
     req: Request<hyper::body::Incoming>,
     state: Arc<ProxyState>, 
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    let host = req.headers().get("host")
+    // 1. Capture the original host
+    let host_header = req.headers().get("host")
         .and_then(|h| h.to_str().ok())
-        .map(|h| h.split(':').next().unwrap_or(h).to_string()) 
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_string(); 
+
+    let host_key = host_header.split(':').next().unwrap_or(&host_header).to_string();
 
     let target_port = {
         let map = state.routes.lock().unwrap();
-        map.get(&host).cloned()
+        map.get(&host_key).cloned()
     };
 
     if let Some(port) = target_port {
@@ -42,7 +45,7 @@ async fn handle_request(
             Ok(s) => s,
             Err(_) => return Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Full::new(Bytes::from("StackManager: Project server not running. Start the project first.")))
+                .body(Full::new(Bytes::from("StackManager: Project server not running.")))
                 .unwrap()),
         };
 
@@ -55,22 +58,35 @@ async fn handle_request(
             }
         });
 
-        // FIX: Added explicit type annotation ": Request<Full<Bytes>>" here
-        let upstream_req: Request<Full<Bytes>> = Request::builder()
+        // 2. Build Upstream Request
+        let mut builder = Request::builder()
             .method(req.method())
-            .uri(req.uri())
-            .header("Host", "127.0.0.1") 
+            .uri(req.uri());
+
+        for (key, value) in req.headers() {
+            builder = builder.header(key, value);
+        }
+
+        // Explicitly set Host header to match browser
+        builder = builder.header("Host", &host_header);
+
+        let upstream_req: Request<Full<Bytes>> = builder
             .body(Full::default()) 
             .unwrap();
 
         if let Ok(res) = sender.send_request(upstream_req).await {
-            let status = res.status();
-            // Collect the actual HTML/Content from PHP/Laravel
-            // .collect() reads the stream, .to_bytes() converts it to a buffer we can send back
-            let body_bytes = res.collect().await.unwrap().to_bytes();
+            // FIX: Split response into Parts (Headers/Status) and Body
+            let (parts, body) = res.into_parts();
+            let body_bytes = body.collect().await.unwrap().to_bytes();
 
-            return Ok(Response::builder()
-                .status(status)
+            let mut resp_builder = Response::builder().status(parts.status);
+            
+            // Forward headers back to browser
+            for (key, value) in parts.headers.iter() {
+                resp_builder = resp_builder.header(key, value);
+            }
+
+            return Ok(resp_builder
                 .body(Full::new(body_bytes)) 
                 .unwrap());
         }
@@ -78,7 +94,7 @@ async fn handle_request(
 
     Ok(Response::builder()
         .status(StatusCode::NOT_FOUND)
-        .body(Full::new(Bytes::from("StackManager: Site Not Found. Check domain settings.")))
+        .body(Full::new(Bytes::from("StackManager: Site Not Found.")))
         .unwrap())
 }
 
