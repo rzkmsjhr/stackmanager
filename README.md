@@ -2,8 +2,7 @@
 
 **StackManager** is a modern, lightweight, and isolated local development environment built specifically for Windows. It serves as a robust alternative to XAMPP, Laragon, or Docker for PHP developers who want speed and simplicity without the configuration headaches.
 
-![StackManager Screenshot](https://via.placeholder.com/800x450?text=StackManager+Dashboard)
-*(Replace this link with an actual screenshot of your dashboard)*
+![StackManager Screenshot](https://res.cloudinary.com/dxueb9uuy/image/upload/v1764147172/Screenshot_2025-11-26_155236_xrvzbv.png)
 
 ## 🚀 Key Features
 
