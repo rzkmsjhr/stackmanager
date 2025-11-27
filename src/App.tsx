@@ -130,12 +130,16 @@ export default function App() {
         }
         const home = await invoke<string>('get_user_home');
         setUserHome(home);
+
         const json = await invoke<string>('load_projects');
-        const savedProjects = JSON.parse(json);
+        const savedProjects: Project[] = JSON.parse(json);
+
         if (savedProjects.length > 0) {
-          setProjects(savedProjects);
-          checkProjectsStatus(savedProjects);
+          const resetProjects = savedProjects.map(p => ({ ...p, status: 'stopped' as ServiceStatus }));
+          setProjects(resetProjects);
+          checkProjectsStatus(resetProjects);
         }
+
         refreshData();
       } catch (error) { console.error("Init Failed:", error); }
     };
