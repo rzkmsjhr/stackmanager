@@ -23,7 +23,7 @@ use process_manager::{start_service, stop_service, ServiceState};
 use filesystem::{
     init_environment, get_services, get_service_bin_path, get_user_home, 
     delete_service_folder, delete_project_dir, check_projects_status, 
-    detect_framework, prepare_php_ini
+    detect_framework, prepare_php_ini, get_node_versions, get_node_path, patch_vite_config
 };
 use downloader::{download_service, install_adminer_file};
 use shim::{set_active_version, get_active_version};
@@ -95,7 +95,10 @@ fn main() {
             add_host_entry,
             remove_host_entry,
             register_proxy_route,
-            check_is_admin
+            check_is_admin,
+            get_node_versions,
+            get_node_path,
+            patch_vite_config
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri app")

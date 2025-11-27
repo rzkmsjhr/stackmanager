@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import {
   Play, Square, Trash2, Info,
   Globe, Activity, Settings,
-  PlusCircle, CheckCircle, XCircle, Terminal, Database,
-  Download, X, Star, Monitor, AlertTriangle, RefreshCw, AlertOctagon,
+  PlusCircle, CheckCircle, XCircle, Terminal, Database, Code2,
+  Download, X, Star, Monitor, AlertTriangle, RefreshCw, AlertOctagon, Layers,
   Hash, ShieldCheck, ShieldAlert, Loader2, Server, KeyRound, ExternalLink, Palette
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
@@ -17,11 +17,12 @@ interface Project {
   id: string;
   name: string;
   path: string;
-  framework: 'laravel' | 'symfony' | 'wordpress' | 'custom';
+  framework: 'laravel' | 'symfony' | 'wordpress' | 'custom' | 'svelte' | 'react' | 'node';
   domain: string;
   port: number;
   status: ServiceStatus;
   phpVersion: string;
+  nodeVersion?: string;
 }
 
 const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
@@ -65,12 +66,22 @@ export default function App() {
   const [customPhpVersion, setCustomPhpVersion] = useState('');
   const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null);
   const [currentGlobalPhp, setCurrentGlobalPhp] = useState<string>('Loading...');
+  const [showNodeManager, setShowNodeManager] = useState(false);
+  const [installedNode, setInstalledNode] = useState<string[]>([]);
 
   const phpPresets = [
     { version: '8.3.2', name: 'php-8.3.2-Win32-vs16-x64', url: 'https://windows.php.net/downloads/releases/archives/php-8.3.2-Win32-vs16-x64.zip' },
     { version: '8.2.10', name: 'php-8.2.10-Win32-vs16-x64', url: 'https://windows.php.net/downloads/releases/archives/php-8.2.10-Win32-vs16-x64.zip' },
     { version: '7.4.33', name: 'php-7.4.33-Win32-vc15-x64', url: 'https://windows.php.net/downloads/releases/archives/php-7.4.33-Win32-vc15-x64.zip' },
     { version: '5.6.40', name: 'php-5.6.40-Win32-vc11-x64', url: 'https://windows.php.net/downloads/releases/archives/php-5.6.40-Win32-vc11-x64.zip' },
+  ];
+
+  const nodePresets = [
+    { version: '24.11.1', name: 'node-v24.11.1-win-x64', url: 'https://nodejs.org/dist/v24.11.1/node-v24.11.1-win-x64.zip' },
+    { version: '22.11.0', name: 'node-v22.11.0-win-x64', url: 'https://nodejs.org/dist/v22.11.0/node-v22.11.0-win-x64.zip' },
+    { version: '20.11.0', name: 'node-v20.11.0-win-x64', url: 'https://nodejs.org/dist/v20.11.0/node-v20.11.0-win-x64.zip' },
+    { version: '18.19.0', name: 'node-v18.19.0-win-x64', url: 'https://nodejs.org/dist/v18.19.0/node-v18.19.0-win-x64.zip' },
+    { version: '16.20.2', name: 'node-v16.20.2-win-x64', url: 'https://nodejs.org/dist/v16.20.2/node-v16.20.2-win-x64.zip' },
   ];
 
   const updateAndSave = async (newProjects: Project[]) => {
@@ -97,6 +108,10 @@ export default function App() {
     try {
       const services = await invoke<string[]>('get_services');
       setInstalledPhp(services.filter(s => s.startsWith('php-')));
+
+      const nodes = await invoke<string[]>('get_node_versions');
+      setInstalledNode(nodes);
+
       setIsMariaDbInstalled(services.some(s => s.startsWith('mariadb')));
       const active = await invoke<string>('get_active_version', { service: 'php' });
       setCurrentGlobalPhp(active);
@@ -264,6 +279,44 @@ export default function App() {
     invoke('open_in_browser', { url });
   };
 
+  const handleDownloadNode = async (name: string, url: string) => {
+    setDownloadingVersion(name);
+    try {
+      await invoke('download_service', { name, url });
+      await message(`${name} installed successfully!`, { title: "Success", kind: "info" });
+      refreshData();
+    } catch (e) {
+      await message(`Failed to download Node: ${e}`, { title: "Error", kind: "error" });
+    } finally {
+      setDownloadingVersion(null);
+    }
+  };
+
+  // --- NEW: Helper to Resolve Paths ---
+  const getEnvPaths = async (project: Project) => {
+    const paths: string[] = [];
+
+    // 1. PHP
+    if (project.phpVersion && project.phpVersion !== 'Global') {
+      try {
+        const phpPath = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion });
+        paths.push(phpPath);
+      } catch (e) { console.warn("Failed to find PHP path", e); }
+    } else {
+      paths.push(`${userHome}\\.stackmanager\\bin\\php`);
+    }
+
+    // 2. Node
+    if (project.nodeVersion && project.nodeVersion !== 'System') {
+      try {
+        const nodeFolder = await invoke<string>('get_node_path', { serviceName: project.nodeVersion });
+        paths.push(nodeFolder);
+      } catch (e) { console.warn("Failed to find Node path", e); }
+    }
+
+    return paths;
+  };
+
   const toggleProjectService = async (project: Project) => {
     if (missingPaths[project.path] === false) { await message("Folder missing.", { title: "Error", kind: "error" }); return; }
 
@@ -279,36 +332,56 @@ export default function App() {
           await invoke('register_proxy_route', { domain: project.domain, port: project.port });
         }
 
-        let home = userHome || await invoke<string>('get_user_home');
-        if (!userHome) setUserHome(home);
+        let binPath = "";
+        let args: string[] = [];
+        let envPaths = await getEnvPaths(project);
 
-        let phpBinDir = `${home}\\.stackmanager\\bin\\php`;
-        let phpPath = `${phpBinDir}\\php.exe`;
-
-        if (project.phpVersion && project.phpVersion !== 'Global') {
-          try {
-            phpBinDir = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion });
-            phpPath = `${phpBinDir}\\php.exe`;
-          } catch (e) { console.warn("Using global PHP."); }
-        }
-
-        try {
-          await invoke('prepare_php_ini', { binPathDir: phpBinDir });
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } catch (e) { console.warn(e); }
-
-        let args = [];
-        if (project.framework === 'laravel') {
-          args = ["artisan", "serve", "--host=127.0.0.1", `--port=${project.port}`];
-        } else {
-          let docRoot = project.path;
-          if (project.framework === 'symfony') {
-            docRoot = `${project.path}/public`;
+        if (['laravel', 'symfony', 'wordpress', 'custom'].includes(project.framework)) {
+          let phpBinDir = `${userHome}\\.stackmanager\\bin\\php`;
+          if (project.phpVersion && project.phpVersion !== 'Global') {
+            try { phpBinDir = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion }); } catch (e) { }
           }
-          args = ["-S", `127.0.0.1:${project.port}`, "-t", docRoot];
+          binPath = `${phpBinDir}\\php.exe`;
+
+          try { await invoke('prepare_php_ini', { binPathDir: phpBinDir }); await new Promise(r => setTimeout(r, 500)); } catch (e) { }
+
+          if (project.framework === 'laravel') {
+            args = ["artisan", "serve", "--host=127.0.0.1", `--port=${project.port}`];
+          } else {
+            let docRoot = project.path;
+            if (project.framework === 'symfony') docRoot = `${project.path}/public`;
+            args = ["-S", `127.0.0.1:${project.port}`, "-t", docRoot];
+          }
         }
 
-        await ServiceAPI.start({ id: backendId, binPath: phpPath, args: args, cwd: project.path });
+        else {
+          let nodeDir = "";
+
+          if (project.nodeVersion && project.nodeVersion !== 'System') {
+            try {
+              nodeDir = await invoke<string>('get_node_path', { serviceName: project.nodeVersion });
+            } catch (e) {
+              console.warn("Node path resolution failed:", e);
+            }
+          }
+
+          if (nodeDir) {
+            binPath = `${nodeDir}\\npm.cmd`;
+          } else {
+            binPath = "npm.cmd";
+          }
+
+          args = ["run", "dev", "--", "--port", project.port.toString(), "--host"];
+        }
+
+        await ServiceAPI.start({
+          id: backendId,
+          binPath: binPath,
+          args: args,
+          cwd: project.path,
+          envPaths: envPaths
+        });
+
         setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'running' } : p));
 
       } else {
@@ -327,11 +400,19 @@ export default function App() {
       if (selected && typeof selected === 'string') {
         const name = selected.split(/[\\/]/).pop() || "Untitled";
         const detected = await invoke<string>('detect_framework', { path: selected });
+        if (['svelte', 'react', 'node'].includes(detected)) {
+          try {
+            await invoke('patch_vite_config', { projectPath: selected });
+            await message("Vite config patched for StackManager compatibility.", { kind: 'info' });
+          } catch (e) {
+            console.warn("Failed to patch vite config:", e);
+          }
+        }
         const existingPorts = projects.map(p => p.port);
         const nextPort = existingPorts.length > 0 ? Math.max(...existingPorts) + 1 : 8001;
         const newProj: Project = {
           id: crypto.randomUUID(), name, path: selected, framework: detected as any,
-          domain: 'localhost', port: nextPort, status: 'stopped', phpVersion: 'Global'
+          domain: 'localhost', port: nextPort, status: 'stopped', phpVersion: 'Global', nodeVersion: 'System'
         };
         updateAndSave([...projects, newProj]);
       }
@@ -355,7 +436,7 @@ export default function App() {
 
       const existingPorts = projects.map(p => p.port);
       const nextPort = existingPorts.length > 0 ? Math.max(...existingPorts) + 1 : 8001;
-      const newProj: Project = { id: crypto.randomUUID(), name: projectName, path: newPath, framework: 'laravel', domain: 'localhost', port: nextPort, status: 'stopped', phpVersion: 'Global' };
+      const newProj: Project = { id: crypto.randomUUID(), name: projectName, path: newPath, framework: 'laravel', domain: 'localhost', port: nextPort, status: 'stopped', phpVersion: 'Global', nodeVersion: 'System' };
       updateAndSave([...projects, newProj]);
       await message("Laravel Project Created!", { title: "Success", kind: "info" });
     } catch (err) { setIsInstalling(false); await message(`Failed: ${err}`, { title: "Error", kind: "error" }); }
@@ -404,11 +485,8 @@ export default function App() {
 
   const openProjectTerminal = async (project: Project) => {
     try {
-      let phpPath = `${userHome}\\.stackmanager\\bin\\php`;
-      if (project.phpVersion && project.phpVersion !== 'Global') {
-        phpPath = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion });
-      }
-      await invoke('open_project_terminal', { cwd: project.path, phpBinPath: phpPath });
+      const envPaths = await getEnvPaths(project);
+      await invoke('open_project_terminal', { cwd: project.path, envPaths });
     } catch (e) { await message(`Failed: ${e}`, { title: "Error", kind: "error" }); }
   };
 
@@ -428,6 +506,19 @@ export default function App() {
         updateAndSave(updatedList);
       }
     } catch (e) { console.error(e); }
+  };
+
+  // Update Framework Icon Helper
+  const FrameworkIcon = ({ framework }: { framework: string }) => {
+    switch (framework) {
+      case 'laravel': return <div className="w-10 h-10 bg-red-100 text-red-600 rounded-lg flex items-center justify-center font-bold text-xs">Lr</div>;
+      case 'symfony': return <div className="w-10 h-10 bg-black text-white rounded-lg flex items-center justify-center font-bold text-xs">Sy</div>;
+      case 'wordpress': return <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center font-bold text-xs">Wp</div>;
+      case 'svelte': return <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-lg flex items-center justify-center font-bold text-xs">Sv</div>;
+      case 'react': return <div className="w-10 h-10 bg-blue-50 text-blue-400 rounded-lg flex items-center justify-center font-bold text-xs">Rc</div>;
+      case 'node': return <div className="w-10 h-10 bg-green-100 text-green-600 rounded-lg flex items-center justify-center font-bold text-xs">JS</div>;
+      default: return <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center font-bold text-xs">PHP</div>;
+    }
   };
 
   return (
@@ -496,6 +587,9 @@ export default function App() {
         <div className="space-y-2 border-t border-slate-100 pt-4">
           <p className="text-xs text-slate-400 mb-2">Tools</p>
           <button onClick={() => setShowPhpManager(true)} className="w-full text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 p-2 rounded text-left flex items-center gap-2"><Settings size={14} /> Manage PHP Versions</button>
+          <button onClick={() => setShowNodeManager(true)} className="w-full text-xs bg-green-50 hover:bg-green-100 text-green-700 p-2 rounded text-left flex items-center gap-2">
+            <Layers size={14} /> Manage Node.js
+          </button>
           <button onClick={handleDownloadMariaDB} disabled={isDownloadingMariaDB || isMariaDbInstalled} className={`w-full text-xs p-2 rounded text-left flex items-center gap-2 transition-colors ${isMariaDbInstalled ? 'bg-green-50 text-green-700' : 'bg-blue-50 hover:bg-blue-100 text-blue-700'}`}>
             {isDownloadingMariaDB ? <Loader2 size={14} className="animate-spin" /> : (isMariaDbInstalled ? <CheckCircle size={14} /> : <Download size={14} />)}
             {isDownloadingMariaDB ? 'Downloading...' : (isMariaDbInstalled ? 'MariaDB Installed' : 'Get MariaDB')}
@@ -553,6 +647,24 @@ export default function App() {
             <div className="p-6 border-b border-slate-100 flex justify-between items-start"><h3 className="text-xl font-bold text-slate-800">{selectedProject.name}</h3><button onClick={() => setIsDetailsOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button></div>
             <div className="p-6 space-y-4">
               <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
+                <span className="text-sm font-medium text-slate-700 flex items-center gap-2"><Code2 size={14} /> Framework</span>
+                <select className="text-sm bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:border-indigo-500"
+                  value={selectedProject.framework}
+                  onChange={(e) => {
+                    const updatedProject = { ...selectedProject, framework: e.target.value as any };
+                    setSelectedProject(updatedProject);
+                    updateAndSave(projects.map(p => p.id === selectedProject.id ? updatedProject : p));
+                  }}>
+                  <option value="custom">Custom PHP</option>
+                  <option value="laravel">Laravel</option>
+                  <option value="wordpress">WordPress</option>
+                  <option value="symfony">Symfony</option>
+                  <option value="svelte">Svelte (Vite)</option>
+                  <option value="react">React (Vite)</option>
+                  <option value="node">Node.js (Generic)</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
                 <span className="text-sm font-medium text-slate-700">PHP Version</span>
                 <select className="text-sm bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:border-indigo-500" value={selectedProject.phpVersion}
                   onChange={async (e) => {
@@ -562,6 +674,19 @@ export default function App() {
                   }}>
                   <option value="Global">Global (Default)</option>
                   {installedPhp.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
+                <span className="text-sm font-medium text-slate-700 flex items-center gap-2"><Layers size={14} /> Node Version</span>
+                <select className="text-sm bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:border-green-500"
+                  value={selectedProject.nodeVersion || 'System'}
+                  onChange={async (e) => {
+                    const updatedProject = { ...selectedProject, nodeVersion: e.target.value };
+                    setSelectedProject(updatedProject);
+                    updateAndSave(projects.map(p => p.id === selectedProject.id ? updatedProject : p));
+                  }}>
+                  <option value="System">System Default</option>
+                  {installedNode.map(v => <option key={v} value={v}>{v}</option>)}
                 </select>
               </div>
               <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
@@ -676,6 +801,46 @@ export default function App() {
                 <button onClick={() => confirmDelete('files')} className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition flex items-center justify-center gap-2"><Trash2 size={18} /> Delete Files & Remove</button>
                 <button onClick={() => confirmDelete('list')} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition">Remove from List Only</button>
                 <button onClick={() => setProjectToDelete(null)} className="mt-2 text-slate-400 hover:text-slate-600 text-sm font-medium">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showNodeManager && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-10 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-2xl rounded-xl shadow-2xl border border-slate-200 flex flex-col max-h-[80vh]">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><div className="p-2 bg-green-100 text-green-600 rounded-lg"><Layers size={20} /></div> Node.js Version Manager</h3>
+              <button onClick={() => setShowNodeManager(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-6">
+              <div>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Installed Versions</h4>
+                <div className="grid grid-cols-1 gap-2">
+                  {installedNode.length === 0 && <p className="text-sm text-slate-400 italic">No Node versions installed.</p>}
+                  {installedNode.map(v => (
+                    <div key={v} className="flex items-center justify-between p-3 bg-green-50 border border-green-100 rounded-lg group">
+                      <span className="font-medium text-green-800">{v}</span>
+                      <button onClick={() => handleDeletePhp(v)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-100 rounded transition-colors"><Trash2 size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Available Presets</h4>
+                <div className="grid grid-cols-1 gap-2">
+                  {nodePresets.map(preset => {
+                    const isInstalled = installedNode.includes(preset.name);
+                    const isDisabled = isInstalled || (downloadingVersion !== null && downloadingVersion !== preset.name);
+                    return (
+                      <div key={preset.version} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                        <div className="flex flex-col"><span className="font-medium text-slate-700">Node {preset.version}</span><span className="text-xs text-slate-400">{preset.name}</span></div>
+                        <button disabled={isDisabled} onClick={() => handleDownloadNode(preset.name, preset.url)} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${isDisabled ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 text-white'}`}>{isInstalled ? 'Installed' : (downloadingVersion === preset.name ? 'Downloading...' : 'Download')}</button>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           </div>

@@ -24,6 +24,7 @@ pub fn start_service(
     bin_path: String,
     args: Vec<String>,
     cwd: Option<String>,
+    env_paths: Option<Vec<String>>,
 ) -> Result<String, String> {
     let mut pids = state.pids.lock().map_err(|_| "Failed to lock state")?;
     
@@ -38,17 +39,26 @@ pub fn start_service(
         command.current_dir(dir);
     }
 
-    if let Some(parent_dir) = Path::new(&bin_path).parent() {
-        let current_path = env::var("PATH").unwrap_or_default();
-        let new_path = if cfg!(target_os = "windows") {
-            format!("{};{}", parent_dir.to_string_lossy(), current_path)
-        } else {
-            format!("{}:{}", parent_dir.to_string_lossy(), current_path)
-        };
-        command.env("PATH", new_path);
+    let current_path = env::var("PATH").unwrap_or_default();
+    let mut new_path_parts = Vec::new();
+
+    if let Some(paths) = env_paths {
+        for p in paths {
+            new_path_parts.push(p);
+        }
     }
+
+    if let Some(parent_dir) = Path::new(&bin_path).parent() {
+        new_path_parts.push(parent_dir.to_string_lossy().to_string());
+    }
+
+    new_path_parts.push(current_path);
+
+    let separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let new_path = new_path_parts.join(separator);
     
-    // Hide console window on Windows
+    command.env("PATH", new_path);
+
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -77,15 +87,10 @@ pub fn stop_service(state: State<ServiceState>, id: String) -> Result<String, St
                 .args(["/F", "/T", "/PID", &pid.to_string()]) 
                 .output();
         }
-
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = Command::new("kill")
-                .arg(pid.to_string())
-                .output();
+            let _ = Command::new("kill").arg(pid.to_string()).output();
         }
-
-        println!("Stopped service: {}", id);
         Ok(format!("Stopped service {}", id))
     } else {
         Err(format!("Service {} not found or not running", id))

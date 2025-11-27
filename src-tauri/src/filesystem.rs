@@ -53,6 +53,13 @@ pub fn get_services() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+pub fn get_node_versions() -> Result<Vec<String>, String> {
+    let services = get_services()?;
+    let nodes = services.into_iter().filter(|s| s.starts_with("node-")).collect();
+    Ok(nodes)
+}
+
+#[tauri::command]
 pub fn get_service_bin_path(service_name: String) -> Result<String, String> {
     let home = get_home_dir().ok_or("Could not find home directory")?;
     let services_path = home.join(".stackmanager").join("services");
@@ -77,6 +84,33 @@ pub fn get_service_bin_path(service_name: String) -> Result<String, String> {
         }
      }
     Ok(base_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn get_node_path(service_name: String) -> Result<String, String> {
+    let home = get_home_dir().ok_or("Could not find home directory")?;
+    let base_path = home.join(".stackmanager").join("services").join(&service_name);
+
+    if !base_path.exists() { return Err("Node version not installed".to_string()); }
+
+    if base_path.join("node.exe").exists() {
+        return Ok(base_path.to_string_lossy().to_string());
+    }
+
+    if let Ok(entries) = fs::read_dir(&base_path) {
+        for entry in entries.flatten() {
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_dir() {
+                    let nested_node = entry.path().join("node.exe");
+                    if nested_node.exists() {
+                        return Ok(entry.path().to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    Err("Could not find node.exe in service folder".to_string())
 }
 
 #[tauri::command]
@@ -132,17 +166,15 @@ pub fn check_projects_status(paths: Vec<String>) -> HashMap<String, bool> {
 pub fn detect_framework(path: String) -> String {
     let p = PathBuf::from(&path);
     
-    if p.join("artisan").exists() {
-        return "laravel".to_string();
-    }
-    
-    if p.join("wp-config.php").exists() || p.join("wp-settings.php").exists() {
-        return "wordpress".to_string();
-    }
+    // PHP Frameworks
+    if p.join("artisan").exists() { return "laravel".to_string(); }
+    if p.join("wp-config.php").exists() || p.join("wp-settings.php").exists() { return "wordpress".to_string(); }
+    if p.join("bin").join("console").exists() { return "symfony".to_string(); }
 
-    if p.join("bin").join("console").exists() {
-        return "symfony".to_string();
-    }
+    // Node Frameworks
+    if p.join("svelte.config.js").exists() { return "svelte".to_string(); }
+    if p.join("vite.config.js").exists() || p.join("vite.config.ts").exists() { return "react".to_string(); } // Generic Vite/React
+    if p.join("package.json").exists() { return "node".to_string(); } // Generic Node
 
     "custom".to_string()
 }
@@ -216,4 +248,47 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
     } else {
         Ok("php.ini already configured".to_string())
     }
+}
+#[tauri::command]
+pub fn patch_vite_config(project_path: String) -> Result<String, String> {
+    let path = PathBuf::from(&project_path);
+    let config_ts = path.join("vite.config.ts");
+    let config_js = path.join("vite.config.js");
+
+    let target_file = if config_ts.exists() {
+        config_ts
+    } else if config_js.exists() {
+        config_js
+    } else {
+        return Ok("No vite.config found, skipping patch".to_string());
+    };
+
+    let content = fs::read_to_string(&target_file).map_err(|e| e.to_string())?;
+
+    if content.contains("allowedHosts: true") && content.contains("hmr: {") {
+        return Ok("Vite config already patched".to_string());
+    }
+    
+    let patch_block = r#"
+    server: {
+        allowedHosts: true,
+        hmr: {
+            host: '127.0.0.1',
+            protocol: 'ws'
+        }
+    },"#;
+
+    let new_content = if let Some(idx) = content.find("export default defineConfig({") {
+        let insert_pos = idx + "export default defineConfig({".len();
+        format!("{}{}{}", &content[..insert_pos], patch_block, &content[insert_pos..])
+    } else if let Some(idx) = content.find("export default {") {
+        let insert_pos = idx + "export default {".len();
+        format!("{}{}{}", &content[..insert_pos], patch_block, &content[insert_pos..])
+    } else {
+        return Err("Could not parse vite config structure. Please patch manually.".to_string());
+    };
+
+    fs::write(&target_file, new_content).map_err(|e| e.to_string())?;
+
+    Ok("Vite config patched successfully".to_string())
 }

@@ -1,10 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export interface ServiceLaunchConfig {
-  id: string;          
-  binPath: string;     
+  id: string;
+  binPath: string;
   args: string[];
-  cwd?: string; // <-- Added this
+  cwd?: string;
+  envPaths?: string[]; // <-- New optional parameter
 }
 
 export const ServiceAPI = {
@@ -14,7 +15,8 @@ export const ServiceAPI = {
         id: config.id,
         binPath: config.binPath,
         args: config.args,
-        cwd: config.cwd || null, // <-- Pass it here
+        cwd: config.cwd || null,
+        envPaths: config.envPaths || null // <-- Pass it here
       });
       console.log('Backend response:', response);
       return response;
@@ -26,11 +28,8 @@ export const ServiceAPI = {
 
   stop: async (id: string): Promise<string> => {
     try {
-      const response = await invoke<string>('stop_service', { id });
-      console.log('Backend response:', response);
-      return response;
+      return await invoke<string>('stop_service', { id });
     } catch (error) {
-      console.error('Failed to stop service:', error);
       throw error;
     }
   }
