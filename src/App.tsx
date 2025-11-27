@@ -201,8 +201,6 @@ export default function App() {
     }
   };
 
-  // ... (Rest of the code remains exactly the same: confirmDelete, handleSetGlobalPhp, handleUpdateDbPassword, handleEditDomain, openProjectUrl, toggleProjectService, addNewProject, createLaravel, handleDeletePhp, handleDownloadPhp, handleDownloadMariaDB, handleCustomDownload, openProjectTerminal, toggleMySQL, handleReAddFolder) ...
-
   const confirmDelete = async (action: 'files' | 'list') => {
     if (!projectToDelete) return;
     if (action === 'files') {
@@ -294,7 +292,10 @@ export default function App() {
           } catch (e) { console.warn("Using global PHP."); }
         }
 
-        try { await invoke('prepare_php_ini', { binPathDir: phpBinDir }); } catch (e) { console.warn(e); }
+        try {
+          await invoke('prepare_php_ini', { binPathDir: phpBinDir });
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (e) { console.warn(e); }
 
         let args = [];
         if (project.framework === 'laravel') {
