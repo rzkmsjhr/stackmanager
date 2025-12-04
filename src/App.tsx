@@ -34,6 +34,28 @@ const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
   }
 };
 
+const checkServiceReadiness = async (port: number, maxRetries = 20): Promise<boolean> => {
+  const url = `http://127.0.0.1:${port}`;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1000); // 1s timeout per try
+      
+      await fetch(url, { 
+        mode: 'no-cors', 
+        signal: controller.signal 
+      });
+      
+      clearTimeout(timeoutId);
+      return true;
+    } catch (e) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  return false;
+};
+
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [mysqlStatus, setMysqlStatus] = useState<ServiceStatus>('stopped');
@@ -326,8 +348,8 @@ export default function App() {
 
     const backendId = `proj_${project.id}`;
     const newStatus = project.status === 'running' ? 'stopped' : 'running';
+    
     const optimisitcStatus = (newStatus === 'running' ? 'starting' : 'stopped') as ServiceStatus;
-
     setProjects(projects.map(p => p.id === project.id ? { ...p, status: optimisitcStatus } : p));
 
     try {
@@ -346,7 +368,6 @@ export default function App() {
             try { phpBinDir = await invoke<string>('get_service_bin_path', { serviceName: project.phpVersion }); } catch (e) { }
           }
           binPath = `${phpBinDir}\\php.exe`;
-
           try { await invoke('prepare_php_ini', { binPathDir: phpBinDir }); await new Promise(r => setTimeout(r, 500)); } catch (e) { }
 
           if (project.framework === 'laravel') {
@@ -357,24 +378,12 @@ export default function App() {
             args = ["-S", `127.0.0.1:${project.port}`, "-t", docRoot];
           }
         }
-
         else {
           let nodeDir = "";
-
           if (project.nodeVersion && project.nodeVersion !== 'System') {
-            try {
-              nodeDir = await invoke<string>('get_node_path', { serviceName: project.nodeVersion });
-            } catch (e) {
-              console.warn("Node path resolution failed:", e);
-            }
+            try { nodeDir = await invoke<string>('get_node_path', { serviceName: project.nodeVersion }); } catch (e) { }
           }
-
-          if (nodeDir) {
-            binPath = `${nodeDir}\\npm.cmd`;
-          } else {
-            binPath = "npm.cmd";
-          }
-
+          binPath = nodeDir ? `${nodeDir}\\npm.cmd` : "npm.cmd";
           args = ["run", "dev", "--", "--port", project.port.toString(), "--host"];
         }
 
@@ -386,7 +395,15 @@ export default function App() {
           envPaths: envPaths
         });
 
-        setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'running' } : p));
+        const isReady = await checkServiceReadiness(project.port);
+
+        if (isReady) {
+          setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'running' } : p));
+        } else {
+          await ServiceAPI.stop(backendId);
+          setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'error' } : p));
+          await message("Service timed out. It started, but didn't open the port.", { title: "Startup Error", kind: "error" });
+        }
 
       } else {
         await ServiceAPI.stop(backendId);
@@ -512,18 +529,18 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  // Update Framework Icon Helper
-  const FrameworkIcon = ({ framework }: { framework: string }) => {
-    switch (framework) {
-      case 'laravel': return <div className="w-10 h-10 bg-red-100 text-red-600 rounded-lg flex items-center justify-center font-bold text-xs">Lr</div>;
-      case 'symfony': return <div className="w-10 h-10 bg-black text-white rounded-lg flex items-center justify-center font-bold text-xs">Sy</div>;
-      case 'wordpress': return <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center font-bold text-xs">Wp</div>;
-      case 'svelte': return <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-lg flex items-center justify-center font-bold text-xs">Sv</div>;
-      case 'react': return <div className="w-10 h-10 bg-blue-50 text-blue-400 rounded-lg flex items-center justify-center font-bold text-xs">Rc</div>;
-      case 'node': return <div className="w-10 h-10 bg-green-100 text-green-600 rounded-lg flex items-center justify-center font-bold text-xs">JS</div>;
-      default: return <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center font-bold text-xs">PHP</div>;
-    }
-  };
+  // // Update Framework Icon Helper
+  // const FrameworkIcon = ({ framework }: { framework: string }) => {
+  //   switch (framework) {
+  //     case 'laravel': return <div className="w-10 h-10 bg-red-100 text-red-600 rounded-lg flex items-center justify-center font-bold text-xs">Lr</div>;
+  //     case 'symfony': return <div className="w-10 h-10 bg-black text-white rounded-lg flex items-center justify-center font-bold text-xs">Sy</div>;
+  //     case 'wordpress': return <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center font-bold text-xs">Wp</div>;
+  //     case 'svelte': return <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-lg flex items-center justify-center font-bold text-xs">Sv</div>;
+  //     case 'react': return <div className="w-10 h-10 bg-blue-50 text-blue-400 rounded-lg flex items-center justify-center font-bold text-xs">Rc</div>;
+  //     case 'node': return <div className="w-10 h-10 bg-green-100 text-green-600 rounded-lg flex items-center justify-center font-bold text-xs">JS</div>;
+  //     default: return <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center font-bold text-xs">PHP</div>;
+  //   }
+  // };
 
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden relative">
