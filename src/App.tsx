@@ -59,6 +59,7 @@ export default function App() {
   const [isInstalling, setIsInstalling] = useState(false);
   const [isDownloadingMariaDB, setIsDownloadingMariaDB] = useState(false);
   const [isAdminerThemeDownloading, setIsAdminerThemeDownloading] = useState(false); // NEW
+  const [installTitle, setInstallTitle] = useState("Installing Project...");
 
   // Stack Data
   const [installedPhp, setInstalledPhp] = useState<string[]>([]);
@@ -423,6 +424,7 @@ export default function App() {
       if (!projectName) return;
 
       setIsInstalling(true);
+      setInstallTitle("Installing Laravel...");
       setComposerLogs(["Starting Composer..."]);
       const unlisten = await listen<string>('composer-progress', (event) => setComposerLogs(prev => [...prev, event.payload]));
       const newPath = await invoke<string>('create_laravel_project', { projectName, parentFolder });
@@ -435,6 +437,47 @@ export default function App() {
       updateAndSave([...projects, newProj]);
       await message("Laravel Project Created!", { title: "Success", kind: "info" });
     } catch (err) { setIsInstalling(false); await message(`Failed: ${err}`, { title: "Error", kind: "error" }); }
+  };
+
+  const createWordpress = async () => {
+    try {
+      const parentFolder = await open({ directory: true, multiple: false });
+      if (!parentFolder || typeof parentFolder !== 'string') return;
+      const projectName = prompt("Project Name (Folder Name):", "my-site");
+      if (!projectName) return;
+
+      setIsInstalling(true);
+      setInstallTitle("Installing WordPress...");
+      setComposerLogs(["Starting Download..."]);
+
+      const unlisten = await listen<string>('composer-progress', (event) => setComposerLogs(prev => [...prev, event.payload]));
+
+      const newPath = await invoke<string>('create_wordpress_project', { projectName, parentFolder });
+
+      unlisten();
+      setIsInstalling(false);
+
+      const existingPorts = projects.map(p => p.port);
+      const nextPort = existingPorts.length > 0 ? Math.max(...existingPorts) + 1 : 8001;
+
+      const newProj: Project = {
+        id: crypto.randomUUID(),
+        name: projectName,
+        path: newPath,
+        framework: 'wordpress',
+        domain: 'localhost',
+        port: nextPort,
+        status: 'stopped',
+        phpVersion: 'Global',
+        nodeVersion: 'System'
+      };
+
+      updateAndSave([...projects, newProj]);
+      await message("WordPress Project Created!", { title: "Success", kind: "info" });
+    } catch (err) {
+      setIsInstalling(false);
+      await message(`Failed: ${err}`, { title: "Error", kind: "error" });
+    }
   };
 
   const handleDeletePhp = async (folderName: string) => {
@@ -591,8 +634,15 @@ export default function App() {
           </button>
         </div>
         <div className="mt-auto space-y-2">
-          <button onClick={createLaravel} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 py-2 px-4 rounded-lg text-sm font-medium border border-red-200"><PlusCircle size={16} /> New Laravel App</button>
-          <button onClick={addNewProject} className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg text-sm font-medium"><PlusCircle size={16} /> Import Project</button>
+          <button onClick={createLaravel} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 py-2 px-4 rounded-lg text-sm font-medium border border-red-200">
+            <PlusCircle size={16} /> New Laravel App
+          </button>
+          <button onClick={createWordpress} className="w-full flex items-center justify-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-600 py-2 px-4 rounded-lg text-sm font-medium border border-blue-200">
+            <PlusCircle size={16} /> New WordPress App
+          </button>
+          <button onClick={addNewProject} className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg text-sm font-medium">
+            <PlusCircle size={16} /> Import Project
+          </button>
         </div>
       </div>
 
@@ -767,8 +817,14 @@ export default function App() {
       {isInstalling && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-10">
           <div className="bg-slate-900 text-slate-200 w-full max-w-3xl rounded-xl shadow-2xl border border-slate-700 flex flex-col h-[500px]">
-            <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800 rounded-t-xl"><h3 className="font-bold flex items-center gap-2"><Terminal size={18} /> Installing Laravel...</h3><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div></div>
-            <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1">{composerLogs.map((log, i) => (<div key={i} className="break-all">{log}</div>))}<div ref={(el) => el?.scrollIntoView({ behavior: "smooth" })}></div></div>
+            <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800 rounded-t-xl">
+              <h3 className="font-bold flex items-center gap-2"><Terminal size={18} /> {installTitle}</h3> { /* Dynamic Title */}
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+            </div>
+            <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1">
+              {composerLogs.map((log, i) => (<div key={i} className="break-all">{log}</div>))}
+              <div ref={(el) => el?.scrollIntoView({ behavior: "smooth" })}></div>
+            </div>
           </div>
         </div>
       )}

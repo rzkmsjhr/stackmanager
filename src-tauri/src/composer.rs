@@ -6,6 +6,7 @@ use reqwest::Client;
 use futures_util::StreamExt;
 use std::io::{BufRead, BufReader, Write};
 use tauri::{AppHandle, Emitter};
+use zip::ZipArchive;
 
 // Helper to get paths
 fn get_paths() -> Option<(PathBuf, PathBuf)> {
@@ -176,4 +177,57 @@ pub async fn create_laravel_project(
     } else {
         Err("Composer exited with error code.".to_string())
     }
+}
+
+#[tauri::command]
+pub async fn create_wordpress_project(
+    app: AppHandle,
+    project_name: String,
+    parent_folder: String
+) -> Result<String, String> {
+    let target_dir = PathBuf::from(&parent_folder).join(&project_name);
+    if target_dir.exists() {
+        return Err("Target directory already exists".to_string());
+    }
+
+    let _ = app.emit("composer-progress", format!("Downloading WordPress to {}...", project_name));
+    
+    let url = "https://wordpress.org/latest.zip";
+    let client = Client::new();
+    let res = client.get(url).send().await.map_err(|e| e.to_string())?;
+    
+    if !res.status().is_success() {
+        return Err(format!("Download failed: {}", res.status()));
+    }
+
+    let temp_zip = PathBuf::from(&parent_folder).join("wp_latest_temp.zip");
+    let mut file = fs::File::create(&temp_zip).map_err(|e| e.to_string())?;
+    let mut stream = res.bytes_stream();
+    
+    while let Some(item) = stream.next().await {
+        let chunk = item.map_err(|e| e.to_string())?;
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+    }
+
+    let _ = app.emit("composer-progress", "Extracting files...");
+
+    let file = fs::File::open(&temp_zip).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+
+    let wp_default_dir = PathBuf::from(&parent_folder).join("wordpress");
+    if wp_default_dir.exists() {
+        fs::remove_file(&temp_zip).ok();
+        return Err("A 'wordpress' folder already exists in the destination. Please rename or remove it.".to_string());
+    }
+
+    archive.extract(&parent_folder).map_err(|e| e.to_string())?;
+    
+    drop(archive); 
+    fs::remove_file(&temp_zip).ok();
+
+    fs::rename(&wp_default_dir, &target_dir).map_err(|e| format!("Failed to rename folder: {}", e))?;
+
+    let _ = app.emit("composer-progress", "WordPress setup complete!");
+    
+    Ok(target_dir.to_string_lossy().to_string())
 }

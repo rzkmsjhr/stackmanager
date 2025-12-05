@@ -29,7 +29,7 @@ use downloader::{download_service, install_adminer_file};
 use shim::{set_active_version, get_active_version};
 use store::{save_projects, load_projects};
 use database::{init_mysql, change_mariadb_password};
-use composer::{init_composer, create_laravel_project};
+use composer::{init_composer, create_laravel_project, create_wordpress_project};
 use terminal::open_project_terminal;
 use hosts::{add_host_entry, remove_host_entry};
 use proxy::{start_proxy_server, register_proxy_route, ProxyState};
@@ -87,6 +87,7 @@ fn main() {
             change_mariadb_password,
             init_composer,
             create_laravel_project,
+            create_wordpress_project,
             open_project_terminal,
             delete_project_dir,
             check_projects_status,
