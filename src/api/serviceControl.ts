@@ -5,7 +5,8 @@ export interface ServiceLaunchConfig {
   binPath: string;
   args: string[];
   cwd?: string;
-  envPaths?: string[]; // <-- New optional parameter
+  envPaths?: string[];
+  port?: number;
 }
 
 export const ServiceAPI = {
@@ -16,7 +17,8 @@ export const ServiceAPI = {
         binPath: config.binPath,
         args: config.args,
         cwd: config.cwd || null,
-        envPaths: config.envPaths || null // <-- Pass it here
+        envPaths: config.envPaths || null,
+        port: config.port || null
       });
       console.log('Backend response:', response);
       return response;

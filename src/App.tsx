@@ -34,28 +34,6 @@ const StatusIndicator = ({ status }: { status: ServiceStatus }) => {
   }
 };
 
-const checkServiceReadiness = async (port: number, maxRetries = 20): Promise<boolean> => {
-  const url = `http://127.0.0.1:${port}`;
-  
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1000); // 1s timeout per try
-      
-      await fetch(url, { 
-        mode: 'no-cors', 
-        signal: controller.signal 
-      });
-      
-      clearTimeout(timeoutId);
-      return true;
-    } catch (e) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-  }
-  return false;
-};
-
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [mysqlStatus, setMysqlStatus] = useState<ServiceStatus>('stopped');
@@ -344,11 +322,13 @@ export default function App() {
   };
 
   const toggleProjectService = async (project: Project) => {
-    if (missingPaths[project.path] === false) { await message("Folder missing.", { title: "Error", kind: "error" }); return; }
+    if (missingPaths[project.path] === false) {
+      await message("Folder missing.", { title: "Error", kind: "error" });
+      return;
+    }
 
     const backendId = `proj_${project.id}`;
     const newStatus = project.status === 'running' ? 'stopped' : 'running';
-    
     const optimisitcStatus = (newStatus === 'running' ? 'starting' : 'stopped') as ServiceStatus;
     setProjects(projects.map(p => p.id === project.id ? { ...p, status: optimisitcStatus } : p));
 
@@ -392,18 +372,11 @@ export default function App() {
           binPath: binPath,
           args: args,
           cwd: project.path,
-          envPaths: envPaths
+          envPaths: envPaths,
+          port: project.port
         });
 
-        const isReady = await checkServiceReadiness(project.port);
-
-        if (isReady) {
-          setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'running' } : p));
-        } else {
-          await ServiceAPI.stop(backendId);
-          setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'error' } : p));
-          await message("Service timed out. It started, but didn't open the port.", { title: "Startup Error", kind: "error" });
-        }
+        setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'running' } : p));
 
       } else {
         await ServiceAPI.stop(backendId);
@@ -412,6 +385,7 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'error' } : p));
+      await message(`Failed to start: ${err}`, { title: "Error", kind: "error" });
     }
   };
 
@@ -649,8 +623,25 @@ export default function App() {
                     <button onClick={() => handleEditDomain(project)} className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 text-slate-600">{project.domain !== 'localhost' ? project.domain : 'Set Domain'}</button>
                     <a href="#" onClick={(e) => { e.preventDefault(); openProjectUrl(project); }} className="text-indigo-600 text-sm hover:underline flex items-center gap-1"><Globe size={14} /> {(project.domain && project.domain !== 'localhost') ? project.domain : `localhost:${project.port}`}</a>
                     <StatusIndicator status={project.status} />
-                    <button onClick={() => toggleProjectService(project)} className={`p-2 rounded-full ${project.status === 'running' ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-500'}`}>{project.status === 'running' ? <Square size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}</button>
-                    <button onClick={() => openProjectTerminal(project)} className="p-2 text-slate-400 hover:text-slate-600"><Terminal size={18} /></button>
+                    <button
+                      onClick={() => toggleProjectService(project)}
+                      disabled={project.status === 'starting'}
+                      className={`p-2 rounded-full transition-colors duration-200 ${project.status === 'running'
+                        ? 'bg-red-50 text-red-500 hover:bg-red-100'
+                        : project.status === 'starting'
+                          ? 'bg-blue-50 text-blue-500 cursor-not-allowed'
+                          : 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100'
+                        }`}
+                      title={project.status === 'running' ? "Stop" : "Start"}
+                    >
+                      {project.status === 'running' ? (
+                        <Square size={18} fill="currentColor" />
+                      ) : project.status === 'starting' ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <Play size={18} fill="currentColor" />
+                      )}
+                    </button><button onClick={() => openProjectTerminal(project)} className="p-2 text-slate-400 hover:text-slate-600"><Terminal size={18} /></button>
                     <button onClick={() => setIsDetailsOpen(true)} onClickCapture={() => setSelectedProject(project)} className="p-2 text-slate-400 hover:text-indigo-600"><Info size={18} /></button>
                     <button onClick={() => setProjectToDelete(project)} className="p-2 text-red-300 hover:text-red-600 hover:bg-red-50 rounded-md"><Trash2 size={18} /></button>
                   </div>
