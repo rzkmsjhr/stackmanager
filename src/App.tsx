@@ -69,6 +69,9 @@ export default function App() {
   const [currentGlobalPhp, setCurrentGlobalPhp] = useState<string>('Loading...');
   const [showNodeManager, setShowNodeManager] = useState(false);
   const [installedNode, setInstalledNode] = useState<string[]>([]);
+  const [postgresStatus, setPostgresStatus] = useState<ServiceStatus>('stopped');
+  const [isPostgresInstalled, setIsPostgresInstalled] = useState(false);
+  const [isDownloadingPostgres, setIsDownloadingPostgres] = useState(false);
 
   const phpPresets = [
     { version: '8.3.2', name: 'php-8.3.2-Win32-vs16-x64', url: 'https://windows.php.net/downloads/releases/archives/php-8.3.2-Win32-vs16-x64.zip' },
@@ -109,14 +112,77 @@ export default function App() {
     try {
       const services = await invoke<string[]>('get_services');
       setInstalledPhp(services.filter(s => s.startsWith('php-')));
-
-      const nodes = await invoke<string[]>('get_node_versions');
-      setInstalledNode(nodes);
+      setInstalledNode(services.filter(s => s.startsWith('node-'))); // Fixed filter logic
 
       setIsMariaDbInstalled(services.some(s => s.startsWith('mariadb')));
+      setIsPostgresInstalled(services.some(s => s.startsWith('postgresql'))); // Check Postgres
+
       const active = await invoke<string>('get_active_version', { service: 'php' });
       setCurrentGlobalPhp(active);
     } catch (e) { console.error(e); }
+  };
+
+  // --- NEW: EDIT PHP INI ---
+  const handleEditPhpIni = async () => {
+    try {
+      const home = await invoke<string>('get_user_home');
+      const iniPath = `${home}\\.stackmanager\\bin\\php\\php.ini`;
+      await invoke('open_file_in_editor', { filePath: iniPath });
+    } catch (e) {
+      await message("Could not open php.ini: " + e, { kind: 'error' });
+    }
+  };
+
+  // --- NEW: POSTGRES LOGIC ---
+  const handleDownloadPostgres = async () => {
+    setIsDownloadingPostgres(true);
+    try {
+      await invoke('download_postgresql');
+      refreshData();
+      await message("PostgreSQL installed successfully!", { kind: 'info' });
+    } catch (e) {
+      await message("Failed to download PostgreSQL: " + e, { kind: 'error' });
+    } finally {
+      setIsDownloadingPostgres(false);
+    }
+  };
+
+  const togglePostgres = async () => {
+    // We assume the folder is fixed for this version for simplicity
+    const serviceName = "postgresql-16.2";
+    const serviceId = "global_postgres";
+
+    if (postgresStatus === 'running') {
+      setPostgresStatus('stopped');
+      await ServiceAPI.stop(serviceId);
+    } else {
+      setPostgresStatus('starting');
+      try {
+        await invoke('init_postgresql', { versionFolder: serviceName });
+
+        let home = userHome;
+        if (!home) home = await invoke<string>('get_user_home');
+
+        // Bin is inside pgsql/bin
+        const binDir = `${home}\\.stackmanager\\services\\${serviceName}\\pgsql\\bin`;
+        const dataDir = `${home}\\.stackmanager\\data\\postgresql`;
+
+        // Start command: pg_ctl -D data_dir start
+        await ServiceAPI.start({
+          id: serviceId,
+          binPath: `${binDir}\\pg_ctl.exe`,
+          args: ["-D", dataDir, "start"]
+        });
+
+        // Wait a moment for it to actually spin up
+        setTimeout(() => setPostgresStatus('running'), 1000);
+
+      } catch (e) {
+        console.error(e);
+        setPostgresStatus('error');
+        await message("Failed to start PostgreSQL: " + e, { kind: 'error' });
+      }
+    }
   };
 
   useEffect(() => {
@@ -480,6 +546,42 @@ export default function App() {
     }
   };
 
+  // --- NEW: SYMFONY LOGIC ---
+  const createSymfony = async () => {
+    try {
+      await invoke('init_composer'); // Ensure composer
+      const parentFolder = await open({ directory: true, multiple: false });
+      if (!parentFolder || typeof parentFolder !== 'string') return;
+      const projectName = prompt("Project Name:", "my-symfony-app");
+      if (!projectName) return;
+
+      setIsInstalling(true);
+      setInstallTitle("Installing Symfony...");
+      setComposerLogs(["Starting Composer..."]);
+
+      const unlisten = await listen<string>('composer-progress', (event) => setComposerLogs(prev => [...prev, event.payload]));
+
+      const newPath = await invoke<string>('create_symfony_project', { projectName, parentFolder });
+
+      unlisten();
+      setIsInstalling(false);
+
+      const existingPorts = projects.map(p => p.port);
+      const nextPort = existingPorts.length > 0 ? Math.max(...existingPorts) + 1 : 8001;
+
+      const newProj: Project = {
+        id: crypto.randomUUID(), name: projectName, path: newPath, framework: 'symfony',
+        domain: 'localhost', port: nextPort, status: 'stopped', phpVersion: 'Global', nodeVersion: 'System'
+      };
+
+      updateAndSave([...projects, newProj]);
+      await message("Symfony Project Created!", { kind: "info" });
+    } catch (err) {
+      setIsInstalling(false);
+      await message(`Failed: ${err}`, { kind: "error" });
+    }
+  };
+
   const handleDeletePhp = async (folderName: string) => {
     if (!await confirm(`Delete ${folderName}?`, { title: 'Confirm', kind: 'warning' })) return;
     try { await invoke('delete_service_folder', { folderName }); refreshData(); } catch (e) { alert("Delete failed: " + e); }
@@ -509,16 +611,18 @@ export default function App() {
 
   const handleCustomDownload = async () => {
     if (!customPhpVersion) return;
-    const parts = customPhpVersion.split('.');
-    if (parts.length < 2) { alert("Invalid version"); return; }
-    const major = parseInt(parts[0]); const minor = parseInt(parts[1]);
-    let compiler = "vs16"; let arch = "x64";
-    if (major === 5) { if (minor <= 4) { compiler = "VC9"; arch = "x86"; } else { compiler = "vc11"; } }
-    else if (major === 7) { if (minor <= 1) compiler = "vc14"; else compiler = "vc15"; }
-    const folderName = `php-${customPhpVersion}-Win32-${compiler}-${arch}`;
-    const url = `https://windows.php.net/downloads/releases/archives/${folderName}.zip`;
-
-    if (await confirm(`Download ${folderName}?`)) { handleDownloadPhp(folderName, url); }
+    if (await confirm(`Attempt to find and download PHP ${customPhpVersion}?`)) {
+      setDownloadingVersion(customPhpVersion);
+      try {
+        await invoke('download_php_robust', { version: customPhpVersion });
+        refreshData();
+        await message(`PHP ${customPhpVersion} installed!`, { kind: "info" });
+      } catch (e) {
+        await message(`Download failed: ${e}`, { kind: "error" });
+      } finally {
+        setDownloadingVersion(null);
+      }
+    }
   };
 
   const openProjectTerminal = async (project: Project) => {
@@ -577,15 +681,21 @@ export default function App() {
           <div className="mb-6 animate-in fade-in zoom-in duration-300">
             {/* ... (PHP and MariaDB cards same as before) ... */}
             <div className="mb-2 flex items-center justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100">
-              <div className="flex items-center gap-3"><div className="p-2 bg-indigo-200 text-indigo-700 rounded"> <Monitor size={16} /> </div><div><div className="text-sm font-bold text-indigo-900">Global PHP</div><div className="text-[10px] text-indigo-500 truncate w-24" title={currentGlobalPhp}>{currentGlobalPhp}</div></div></div>
-            </div>
-            <div className="mb-2 flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-              <div className="flex items-center gap-3"><div className="p-2 bg-blue-100 text-blue-600 rounded"> <Database size={16} /> </div><div><div className="text-sm font-medium">MariaDB</div><div className="text-[10px] text-slate-400">Port 3306</div></div></div>
-              <div className="flex gap-1">
-                <button onClick={() => setShowDbConfig(true)} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"><Settings size={14} /></button>
-                <button onClick={toggleMySQL} className={`p-1.5 rounded transition-colors ${mysqlStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>{mysqlStatus === 'running' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}</button>
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-200 text-indigo-700 rounded"><Monitor size={16} /></div>
+                <div><div className="text-sm font-bold text-indigo-900">Global PHP</div><div className="text-[10px] text-indigo-500 truncate w-24" title={currentGlobalPhp}>{currentGlobalPhp}</div></div>
               </div>
+              <button onClick={handleEditPhpIni} className="p-1.5 text-indigo-400 hover:text-indigo-700 hover:bg-indigo-100 rounded transition-colors" title="Edit php.ini"><Settings size={14} /></button>
             </div>
+
+            {(isPostgresInstalled) && (
+              <div className="mb-2 flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                <div className="flex items-center gap-3"><div className="p-2 bg-blue-800 text-white rounded"> <Database size={16} /> </div><div><div className="text-sm font-medium">PostgreSQL</div><div className="text-[10px] text-slate-400">Port 5432</div></div></div>
+                <div className="flex gap-1">
+                  <button onClick={togglePostgres} className={`p-1.5 rounded transition-colors ${postgresStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>{postgresStatus === 'running' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}</button>
+                </div>
+              </div>
+            )}
 
             {/* --- UPDATED ADMINER CARD --- */}
             <div className="flex items-center justify-between p-3 bg-orange-50 rounded-lg border border-orange-100">
@@ -632,10 +742,17 @@ export default function App() {
             {isDownloadingMariaDB ? <Loader2 size={14} className="animate-spin" /> : (isMariaDbInstalled ? <CheckCircle size={14} /> : <Download size={14} />)}
             {isDownloadingMariaDB ? 'Downloading...' : (isMariaDbInstalled ? 'MariaDB Installed' : 'Get MariaDB')}
           </button>
+          <button onClick={handleDownloadPostgres} disabled={isDownloadingPostgres || isPostgresInstalled} className={`w-full text-xs p-2 rounded text-left flex items-center gap-2 transition-colors ${isPostgresInstalled ? 'bg-blue-50 text-blue-800' : 'bg-blue-50 hover:bg-blue-100 text-blue-700'}`}>
+            {isDownloadingPostgres ? <Loader2 size={14} className="animate-spin" /> : (isPostgresInstalled ? <CheckCircle size={14} /> : <Download size={14} />)}
+            {isDownloadingPostgres ? 'Downloading...' : (isPostgresInstalled ? 'PostgreSQL Installed' : 'Get PostgreSQL 16')}
+          </button>
         </div>
         <div className="mt-auto space-y-2">
           <button onClick={createLaravel} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 py-2 px-4 rounded-lg text-sm font-medium border border-red-200">
             <PlusCircle size={16} /> New Laravel App
+          </button>
+          <button onClick={createSymfony} className="w-full flex items-center justify-center gap-2 bg-black hover:bg-gray-800 text-white py-2 px-4 rounded-lg text-sm font-medium border border-gray-900">
+            <PlusCircle size={16} /> New Symfony App
           </button>
           <button onClick={createWordpress} className="w-full flex items-center justify-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-600 py-2 px-4 rounded-lg text-sm font-medium border border-blue-200">
             <PlusCircle size={16} /> New WordPress App

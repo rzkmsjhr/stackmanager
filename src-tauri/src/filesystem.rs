@@ -16,6 +16,32 @@ fn get_home_dir() -> Option<PathBuf> {
 }
 
 #[tauri::command]
+pub fn open_file_in_editor(file_path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &file_path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn init_environment() -> Result<String, String> {
     let home = get_home_dir().ok_or("Could not find home directory")?;
     let root_path = home.join(".stackmanager");

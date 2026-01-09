@@ -110,3 +110,51 @@ pub fn change_mariadb_password(bin_path: String, old_pass: String, new_pass: Str
         Err(format!("Error: {}", err))
     }
 }
+
+#[tauri::command]
+pub fn init_postgresql(version_folder: String) -> Result<String, String> {
+    let home = get_home().ok_or("Home not found")?;
+    let base = home.join(".stackmanager");
+    
+    // Postgres zip extracts to a "pgsql" folder inside the version folder
+    // e.g. services/postgresql-16.2/pgsql/bin/initdb.exe
+    let service_dir = base.join("services").join(&version_folder).join("pgsql");
+    
+    let data_dir = base.join("data").join("postgresql");
+
+    if !data_dir.exists() {
+        fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    }
+
+    // Check if already initialized (look for PG_VERSION)
+    if data_dir.join("PG_VERSION").exists() {
+        return Ok("PostgreSQL already initialized".to_string());
+    }
+
+    let initdb_exe = service_dir.join("bin").join("initdb.exe");
+    if !initdb_exe.exists() {
+        return Err(format!("Could not find initdb.exe at {:?}", initdb_exe));
+    }
+
+    println!("Initializing PostgreSQL...");
+
+    // initdb -D "path/to/data" -U postgres -E UTF8 --no-locale
+    let output = Command::new(initdb_exe)
+        .arg("-D")
+        .arg(&data_dir)
+        .arg("-U")
+        .arg("postgres")
+        .arg("-E")
+        .arg("UTF8")
+        .arg("--no-locale")
+        .output()
+        .map_err(|e| format!("Failed to run initdb: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("PostgreSQL Init Failed: {}\n{}", err, out));
+    }
+
+    Ok("PostgreSQL Initialized Successfully".to_string())
+}

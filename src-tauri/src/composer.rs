@@ -231,3 +231,64 @@ pub async fn create_wordpress_project(
     
     Ok(target_dir.to_string_lossy().to_string())
 }
+
+#[tauri::command]
+pub async fn create_symfony_project(
+    app: AppHandle,
+    project_name: String,
+    parent_folder: String
+) -> Result<String, String> {
+    let (bin_dir, _) = get_paths().ok_or("Home dir not found")?;
+    let composer_phar = bin_dir.join("composer.phar");
+    let php_exe = bin_dir.join("php").join("php.exe");
+
+    ensure_php_extensions(&bin_dir.join("php"))?;
+
+    if !composer_phar.exists() { return Err("Composer missing".to_string()); }
+
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd");
+        // Symfony Skeleton is the standard starting point
+        c.args(&["/C", &php_exe.to_string_lossy(), &composer_phar.to_string_lossy(), "create-project", "symfony/skeleton", &project_name, "--prefer-dist"]);
+        c
+    } else {
+        let mut c = Command::new(&php_exe);
+        c.args(&[&composer_phar.to_string_lossy(), "create-project", "symfony/skeleton", &project_name, "--prefer-dist"]);
+        c
+    };
+
+    cmd.current_dir(&parent_folder)
+       .stdout(Stdio::piped())
+       .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to start composer: {}", e))?;
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(l) = line { let _ = app_handle.emit("composer-progress", l); }
+        }
+    });
+
+    let app_handle_err = app.clone();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(l) = line { let _ = app_handle_err.emit("composer-progress", l); }
+        }
+    });
+
+    let status = tauri::async_runtime::spawn_blocking(move || child.wait()).await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        let path = std::path::Path::new(&parent_folder).join(&project_name);
+        Ok(path.to_string_lossy().to_string())
+    } else {
+        Err("Composer exited with error code.".to_string())
+    }
+}
