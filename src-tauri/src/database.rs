@@ -55,7 +55,6 @@ pub fn init_mysql(version_folder: String) -> Result<String, String> {
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        // Often mysql_install_db prints help to stdout on error, check both
         let out = String::from_utf8_lossy(&output.stdout);
         return Err(format!("MariaDB Init Failed: {} {}", err, out));
     }
@@ -115,18 +114,14 @@ pub fn change_mariadb_password(bin_path: String, old_pass: String, new_pass: Str
 pub fn init_postgresql(version_folder: String) -> Result<String, String> {
     let home = get_home().ok_or("Home not found")?;
     let base = home.join(".stackmanager");
-    
-    // Postgres zip extracts to a "pgsql" folder inside the version folder
-    // e.g. services/postgresql-16.2/pgsql/bin/initdb.exe
+
     let service_dir = base.join("services").join(&version_folder).join("pgsql");
-    
     let data_dir = base.join("data").join("postgresql");
 
     if !data_dir.exists() {
         fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     }
 
-    // Check if already initialized (look for PG_VERSION)
     if data_dir.join("PG_VERSION").exists() {
         return Ok("PostgreSQL already initialized".to_string());
     }
@@ -138,7 +133,6 @@ pub fn init_postgresql(version_folder: String) -> Result<String, String> {
 
     println!("Initializing PostgreSQL...");
 
-    // initdb -D "path/to/data" -U postgres -E UTF8 --no-locale
     let output = Command::new(initdb_exe)
         .arg("-D")
         .arg(&data_dir)
@@ -147,6 +141,8 @@ pub fn init_postgresql(version_folder: String) -> Result<String, String> {
         .arg("-E")
         .arg("UTF8")
         .arg("--no-locale")
+        .arg("-A")
+        .arg("trust") 
         .output()
         .map_err(|e| format!("Failed to run initdb: {}", e))?;
 
@@ -157,4 +153,35 @@ pub fn init_postgresql(version_folder: String) -> Result<String, String> {
     }
 
     Ok("PostgreSQL Initialized Successfully".to_string())
+}
+
+#[tauri::command]
+pub fn change_postgres_password(bin_path: String, new_pass: String) -> Result<String, String> {
+    let bin_dir = PathBuf::from(&bin_path);
+    let psql_exe = bin_dir.join("psql.exe");
+
+    if !psql_exe.exists() {
+        return Err("Could not find psql.exe".to_string());
+    }
+
+    let sql = format!("ALTER USER postgres WITH PASSWORD '{}';", new_pass);
+
+    let mut command = Command::new(&psql_exe);
+    command.args(&["-U", "postgres", "-d", "postgres", "-c", &sql]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command.output().map_err(|e| format!("Failed to execute psql: {}", e))?;
+
+    if output.status.success() {
+        Ok("PostgreSQL password updated.".to_string())
+    } else {
+        let err = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Failed to set password: {}", err))
+    }
 }

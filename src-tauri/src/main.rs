@@ -28,7 +28,7 @@ use filesystem::{
 use downloader::{download_service, install_adminer_file, download_postgresql, download_php_robust};
 use shim::{set_active_version, get_active_version};
 use store::{save_projects, load_projects};
-use database::{init_mysql, change_mariadb_password, init_postgresql};
+use database::{init_mysql, change_mariadb_password, init_postgresql, change_postgres_password};
 use composer::{init_composer, create_laravel_project, create_wordpress_project, create_symfony_project};
 use terminal::open_project_terminal;
 use hosts::{add_host_entry, remove_host_entry};
@@ -105,6 +105,7 @@ fn main() {
             download_postgresql,
             download_php_robust,
             init_postgresql,
+            change_postgres_password,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri app")

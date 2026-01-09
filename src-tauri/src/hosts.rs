@@ -1,55 +1,78 @@
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::Command;
 
-#[cfg(target_os = "windows")]
 fn get_hosts_path() -> PathBuf {
-    PathBuf::from(r"C:\Windows\System32\drivers\etc\hosts")
-}
-
-#[cfg(not(target_os = "windows"))]
-fn get_hosts_path() -> PathBuf {
-    PathBuf::from("/etc/hosts")
+    PathBuf::from("C:\\Windows\\System32\\drivers\\etc\\hosts")
 }
 
 #[tauri::command]
 pub fn add_host_entry(domain: String) -> Result<String, String> {
     let hosts_path = get_hosts_path();
-    
-    // 1. Read existing content
-    let mut content = String::new();
-    let mut file = OpenOptions::new().read(true).open(&hosts_path)
-        .map_err(|e| format!("Permission Denied: Run App as Admin. ({})", e))?;
-    file.read_to_string(&mut content).map_err(|e| e.to_string())?;
+    let ip = "127.0.0.1";
+    let entry = format!("\n{} {}\n", ip, domain);
 
-    // 2. Check if already exists
-    let entry = format!("127.0.0.1 {}", domain);
-    if content.contains(&entry) {
-        return Ok("Entry already exists".to_string());
+    if let Ok(mut file) = OpenOptions::new().append(true).open(&hosts_path) {
+        if file.write_all(entry.as_bytes()).is_ok() {
+            return Ok(format!("Mapped {} to {}", domain, ip));
+        }
     }
 
-    // 3. Append
-    let mut file = OpenOptions::new().append(true).open(&hosts_path)
-        .map_err(|e| format!("Failed to write hosts file: {}", e))?;
-    
-    writeln!(file, "\n{}", entry).map_err(|e| e.to_string())?;
+    let ps_command = format!(
+        "Add-Content -Path '{}' -Value '{}' -Force", 
+        hosts_path.to_string_lossy(), 
+        entry.trim()
+    );
 
-    Ok(format!("Added {} to hosts file", domain))
+    run_elevated_powershell(&ps_command)
 }
 
 #[tauri::command]
 pub fn remove_host_entry(domain: String) -> Result<String, String> {
     let hosts_path = get_hosts_path();
-    let content = fs::read_to_string(&hosts_path).map_err(|e| e.to_string())?;
     
-    let entry = format!("127.0.0.1 {}", domain);
-    
-    let new_content: String = content.lines()
-        .filter(|line| !line.contains(&entry))
-        .collect::<Vec<&str>>()
-        .join("\n");
+    let can_write = OpenOptions::new().write(true).open(&hosts_path).is_ok();
 
-    fs::write(&hosts_path, new_content).map_err(|e| format!("Write failed: {}", e))?;
+    if can_write {
+        let content = fs::read_to_string(&hosts_path).map_err(|e| e.to_string())?;
+        let new_content = content
+            .lines()
+            .filter(|line| !line.contains(&domain))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&hosts_path, new_content).map_err(|e| e.to_string())?;
+        return Ok(format!("Removed {}", domain));
+    }
+
+    let ps_command = format!(
+        "(Get-Content '{}') | Where-Object {{ $_ -notmatch '{}' }} | Set-Content '{}' -Force",
+        hosts_path.to_string_lossy(),
+        domain,
+        hosts_path.to_string_lossy()
+    );
+
+    run_elevated_powershell(&ps_command)
+}
+
+fn run_elevated_powershell(command: &str) -> Result<String, String> {
+    println!("Requesting Elevation for: {}", command);
     
-    Ok(format!("Removed {} from hosts", domain))
+    let output = Command::new("powershell")
+        .args(&[
+            "Start-Process",
+            "powershell",
+            "-Verb", "RunAs",
+            "-WindowStyle", "Hidden",
+            "-Wait",
+            "-ArgumentList", &format!("\"-Command {}\"", command.replace("\"", "`\""))
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        Ok("Operation completed via Admin prompt".to_string())
+    } else {
+        Err("Failed to elevate privileges".to_string())
+    }
 }

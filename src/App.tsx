@@ -4,7 +4,7 @@ import {
   Globe, Activity, Settings,
   PlusCircle, CheckCircle, XCircle, Terminal, Database, Code2,
   Download, X, Star, Monitor, AlertTriangle, RefreshCw, AlertOctagon, Layers,
-  Hash, ShieldCheck, ShieldAlert, Loader2, Server, KeyRound, ExternalLink, Palette
+  Hash, Loader2, Server, KeyRound, ExternalLink, Palette, ChevronUp,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open, confirm, message } from '@tauri-apps/plugin-dialog';
@@ -47,12 +47,15 @@ export default function App() {
   const [showPhpManager, setShowPhpManager] = useState(false);
   const [showDbConfig, setShowDbConfig] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
-  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
-  const [showAdminToast, setShowAdminToast] = useState(false);
 
   // DB Config State
   const [dbOldPass, setDbOldPass] = useState('');
   const [dbNewPass, setDbNewPass] = useState('');
+  const [postgresStatus, setPostgresStatus] = useState<ServiceStatus>('stopped');
+  const [isPostgresInstalled, setIsPostgresInstalled] = useState(false);
+  const [isDownloadingPostgres, setIsDownloadingPostgres] = useState(false);
+  const [showPgConfig, setShowPgConfig] = useState(false);
+  const [pgNewPass, setPgNewPass] = useState('');
 
   // Installer & Downloads
   const [composerLogs, setComposerLogs] = useState<string[]>([]);
@@ -69,9 +72,7 @@ export default function App() {
   const [currentGlobalPhp, setCurrentGlobalPhp] = useState<string>('Loading...');
   const [showNodeManager, setShowNodeManager] = useState(false);
   const [installedNode, setInstalledNode] = useState<string[]>([]);
-  const [postgresStatus, setPostgresStatus] = useState<ServiceStatus>('stopped');
-  const [isPostgresInstalled, setIsPostgresInstalled] = useState(false);
-  const [isDownloadingPostgres, setIsDownloadingPostgres] = useState(false);
+  const [showProjectMenu, setShowProjectMenu] = useState(false);
 
   const phpPresets = [
     { version: '8.3.2', name: 'php-8.3.2-Win32-vs16-x64', url: 'https://windows.php.net/downloads/releases/archives/php-8.3.2-Win32-vs16-x64.zip' },
@@ -112,7 +113,7 @@ export default function App() {
     try {
       const services = await invoke<string[]>('get_services');
       setInstalledPhp(services.filter(s => s.startsWith('php-')));
-      setInstalledNode(services.filter(s => s.startsWith('node-'))); // Fixed filter logic
+      setInstalledNode(services.filter(s => s.startsWith('node-')));
 
       setIsMariaDbInstalled(services.some(s => s.startsWith('mariadb')));
       setIsPostgresInstalled(services.some(s => s.startsWith('postgresql'))); // Check Postgres
@@ -122,7 +123,6 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  // --- NEW: EDIT PHP INI ---
   const handleEditPhpIni = async () => {
     try {
       const home = await invoke<string>('get_user_home');
@@ -133,7 +133,6 @@ export default function App() {
     }
   };
 
-  // --- NEW: POSTGRES LOGIC ---
   const handleDownloadPostgres = async () => {
     setIsDownloadingPostgres(true);
     try {
@@ -147,8 +146,22 @@ export default function App() {
     }
   };
 
+  const handleUpdatePgPassword = async () => {
+    if (postgresStatus !== 'running') {
+      await message("Please start PostgreSQL first.", { title: "Service Stopped", kind: "warning" });
+      return;
+    }
+    try {
+      const home = await invoke<string>('get_user_home');
+      const binDir = `${home}\\.stackmanager\\services\\postgresql-16.2\\pgsql\\bin`;
+      await invoke('change_postgres_password', { binPath: binDir, newPass: pgNewPass });
+      await message("Postgres password updated!", { title: "Success", kind: "info" });
+      setPgNewPass('');
+      setShowPgConfig(false);
+    } catch (e) { await message(`Failed: ${e}`, { title: "Error", kind: "error" }); }
+  };
+
   const togglePostgres = async () => {
-    // We assume the folder is fixed for this version for simplicity
     const serviceName = "postgresql-16.2";
     const serviceId = "global_postgres";
 
@@ -160,23 +173,18 @@ export default function App() {
       try {
         await invoke('init_postgresql', { versionFolder: serviceName });
 
-        let home = userHome;
-        if (!home) home = await invoke<string>('get_user_home');
-
-        // Bin is inside pgsql/bin
+        let home = userHome || await invoke<string>('get_user_home');
         const binDir = `${home}\\.stackmanager\\services\\${serviceName}\\pgsql\\bin`;
         const dataDir = `${home}\\.stackmanager\\data\\postgresql`;
 
-        // Start command: pg_ctl -D data_dir start
         await ServiceAPI.start({
           id: serviceId,
-          binPath: `${binDir}\\pg_ctl.exe`,
-          args: ["-D", dataDir, "start"]
+          binPath: `${binDir}\\postgres.exe`,
+          args: ["-D", dataDir],
+          port: 5432
         });
 
-        // Wait a moment for it to actually spin up
-        setTimeout(() => setPostgresStatus('running'), 1000);
-
+        setPostgresStatus('running');
       } catch (e) {
         console.error(e);
         setPostgresStatus('error');
@@ -189,12 +197,6 @@ export default function App() {
     const init = async () => {
       try {
         await invoke('init_environment');
-        const adminStatus = await invoke<boolean>('check_is_admin');
-        setIsAdmin(adminStatus);
-        if (adminStatus) {
-          setShowAdminToast(true);
-          setTimeout(() => setShowAdminToast(false), 4000);
-        }
         const home = await invoke<string>('get_user_home');
         setUserHome(home);
 
@@ -213,7 +215,6 @@ export default function App() {
     init();
   }, []);
 
-  // --- ADMINER THEMES ---
   const handleAdminerTheme = async () => {
     const themes = [
       { name: "Pappu687 (Light)", url: "https://www.adminer.org/download/v5.4.1/designs/pappu687/adminer.css" },
@@ -231,9 +232,8 @@ export default function App() {
     if (index >= 0 && index < themes.length) {
       const theme = themes[index];
       try {
-        setIsAdminerThemeDownloading(true); // Show Loading UI
+        setIsAdminerThemeDownloading(true);
 
-        // Download CSS to .stackmanager/adminer/adminer.css
         await invoke('install_adminer_file', {
           fileName: 'adminer.css',
           url: theme.url
@@ -256,7 +256,6 @@ export default function App() {
     }
     try {
       setAdminerStatus('starting');
-      // 1. Download index.php (Renamed from adminer.php for auto-index)
       await invoke('install_adminer_file', {
         fileName: 'index.php',
         url: 'https://www.adminer.org/latest.php'
@@ -267,11 +266,8 @@ export default function App() {
       const phpPath = `${home}\\.stackmanager\\bin\\php\\php.exe`;
       const adminerDir = `${home}\\.stackmanager\\adminer`; // Point to FOLDER
 
-      // Ensure PHP.ini is ready
       try { await invoke('prepare_php_ini', { binPathDir: `${home}\\.stackmanager\\bin\\php` }); } catch (e) { }
 
-      // 2. Run PHP Server on the FOLDER (-t)
-      // This enables "index.php" autoloading AND "adminer.css" loading
       await ServiceAPI.start({
         id: 'adminer_service',
         binPath: phpPath,
@@ -279,12 +275,27 @@ export default function App() {
       });
 
       setAdminerStatus('running');
-      invoke('open_in_browser', { url: 'http://127.0.0.1:9000/?server=localhost&username=root' });
     } catch (e) {
       console.error(e);
       await message(`Failed to start Adminer: ${e}`, { title: "Error", kind: "error" });
       setAdminerStatus('error');
     }
+  };
+
+  const handleOpenAdminer = async (type: 'mariadb' | 'postgres') => {
+    if (adminerStatus !== 'running') {
+      await message(
+        "Adminer is not running.\n\nPlease start the Adminer service first.",
+        { title: "Service Stopped", kind: "warning" }
+      );
+      return;
+    }
+
+    const params = type === 'mariadb'
+      ? '?server=localhost&username=root'
+      : '?pgsql=localhost&username=postgres';
+
+    await invoke('open_in_browser', { url: `http://127.0.0.1:9000/${params}` });
   };
 
   const confirmDelete = async (action: 'files' | 'list') => {
@@ -328,10 +339,6 @@ export default function App() {
   };
 
   const handleEditDomain = async (project: Project) => {
-    if (!isAdmin) {
-      await message("Run as Administrator to map domains.", { title: "Permission Denied", kind: "error" });
-      return;
-    }
     const newDomain = prompt("Enter custom domain (e.g., blog.test):", project.domain === 'localhost' ? '' : project.domain);
     if (newDomain && newDomain !== project.domain) {
       try {
@@ -363,7 +370,6 @@ export default function App() {
     }
   };
 
-  // --- NEW: Helper to Resolve Paths ---
   const getEnvPaths = async (project: Project) => {
     const paths: string[] = [];
 
@@ -546,10 +552,9 @@ export default function App() {
     }
   };
 
-  // --- NEW: SYMFONY LOGIC ---
   const createSymfony = async () => {
     try {
-      await invoke('init_composer'); // Ensure composer
+      await invoke('init_composer');
       const parentFolder = await open({ directory: true, multiple: false });
       if (!parentFolder || typeof parentFolder !== 'string') return;
       const projectName = prompt("Project Name:", "my-symfony-app");
@@ -560,15 +565,12 @@ export default function App() {
       setComposerLogs(["Starting Composer..."]);
 
       const unlisten = await listen<string>('composer-progress', (event) => setComposerLogs(prev => [...prev, event.payload]));
-
       const newPath = await invoke<string>('create_symfony_project', { projectName, parentFolder });
-
       unlisten();
       setIsInstalling(false);
 
       const existingPorts = projects.map(p => p.port);
       const nextPort = existingPorts.length > 0 ? Math.max(...existingPorts) + 1 : 8001;
-
       const newProj: Project = {
         id: crypto.randomUUID(), name: projectName, path: newPath, framework: 'symfony',
         domain: 'localhost', port: nextPort, status: 'stopped', phpVersion: 'Global', nodeVersion: 'System'
@@ -576,10 +578,7 @@ export default function App() {
 
       updateAndSave([...projects, newProj]);
       await message("Symfony Project Created!", { kind: "info" });
-    } catch (err) {
-      setIsInstalling(false);
-      await message(`Failed: ${err}`, { kind: "error" });
-    }
+    } catch (err) { setIsInstalling(false); await message(`Failed: ${err}`, { kind: "error" }); }
   };
 
   const handleDeletePhp = async (folderName: string) => {
@@ -617,11 +616,8 @@ export default function App() {
         await invoke('download_php_robust', { version: customPhpVersion });
         refreshData();
         await message(`PHP ${customPhpVersion} installed!`, { kind: "info" });
-      } catch (e) {
-        await message(`Download failed: ${e}`, { kind: "error" });
-      } finally {
-        setDownloadingVersion(null);
-      }
+      } catch (e) { await message(`Download failed: ${e}`, { kind: "error" }); }
+      finally { setDownloadingVersion(null); }
     }
   };
 
@@ -650,79 +646,82 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  // // Update Framework Icon Helper
-  // const FrameworkIcon = ({ framework }: { framework: string }) => {
-  //   switch (framework) {
-  //     case 'laravel': return <div className="w-10 h-10 bg-red-100 text-red-600 rounded-lg flex items-center justify-center font-bold text-xs">Lr</div>;
-  //     case 'symfony': return <div className="w-10 h-10 bg-black text-white rounded-lg flex items-center justify-center font-bold text-xs">Sy</div>;
-  //     case 'wordpress': return <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center font-bold text-xs">Wp</div>;
-  //     case 'svelte': return <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-lg flex items-center justify-center font-bold text-xs">Sv</div>;
-  //     case 'react': return <div className="w-10 h-10 bg-blue-50 text-blue-400 rounded-lg flex items-center justify-center font-bold text-xs">Rc</div>;
-  //     case 'node': return <div className="w-10 h-10 bg-green-100 text-green-600 rounded-lg flex items-center justify-center font-bold text-xs">JS</div>;
-  //     default: return <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center font-bold text-xs">PHP</div>;
-  //   }
-  // };
-
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden relative">
-      {/* ... (Admin Toast same as before) ... */}
-      {showAdminToast && (
-        <div className="absolute top-4 right-4 z-50 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 animate-in slide-in-from-top-5 fade-in duration-300">
-          <ShieldCheck size={20} />
-          <div><p className="font-bold text-sm">Running as Administrator</p><p className="text-xs opacity-90">Full system access enabled.</p></div>
-        </div>
-      )}
-
       <div className="w-64 bg-white border-r border-slate-200 p-6 flex flex-col">
         <h1 className="text-xl font-bold text-indigo-600">StackManager</h1>
         <p className="text-xs text-slate-400 mb-6">v0.2.0 Beta</p>
 
-        {(installedPhp.length > 0 && isMariaDbInstalled) ? (
-          <div className="mb-6 animate-in fade-in zoom-in duration-300">
-            {/* ... (PHP and MariaDB cards same as before) ... */}
-            <div className="mb-2 flex items-center justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100">
-              <div className="flex items-center gap-3">
+        {(installedPhp.length > 0) ? (
+          <div className="mb-6 animate-in fade-in zoom-in duration-300 space-y-2">
+
+            <div className="flex items-center justify-between p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+              <div className="flex items-center gap-2"> {/* Reduced gap-3 to gap-2 */}
                 <div className="p-2 bg-indigo-200 text-indigo-700 rounded"><Monitor size={16} /></div>
                 <div><div className="text-sm font-bold text-indigo-900">Global PHP</div><div className="text-[10px] text-indigo-500 truncate w-24" title={currentGlobalPhp}>{currentGlobalPhp}</div></div>
               </div>
               <button onClick={handleEditPhpIni} className="p-1.5 text-indigo-400 hover:text-indigo-700 hover:bg-indigo-100 rounded transition-colors" title="Edit php.ini"><Settings size={14} /></button>
             </div>
 
-            {(isPostgresInstalled) && (
-              <div className="mb-2 flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                <div className="flex items-center gap-3"><div className="p-2 bg-blue-800 text-white rounded"> <Database size={16} /> </div><div><div className="text-sm font-medium">PostgreSQL</div><div className="text-[10px] text-slate-400">Port 5432</div></div></div>
-                <div className="flex gap-1">
-                  <button onClick={togglePostgres} className={`p-1.5 rounded transition-colors ${postgresStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>{postgresStatus === 'running' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}</button>
+            {isMariaDbInstalled && (
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <div className="p-2 bg-blue-100 text-blue-600 rounded flex-shrink-0"> <Database size={16} /> </div>
+                  <div className="min-w-0"><div className="text-sm font-medium truncate">MariaDB</div><div className="text-[10px] text-slate-400">Port 3306</div></div>
+                </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  <button onClick={() => setShowDbConfig(true)} className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors" title="Configure Root Password"><Settings size={14} /></button>
+                  <button
+                    onClick={() => handleOpenAdminer('mariadb')}
+                    className="p-1 text-blue-600 hover:bg-blue-100 rounded transition-colors"
+                    title="Open Adminer (MariaDB)"
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+
+                  <button onClick={toggleMySQL} className={`p-1 rounded transition-colors ${mysqlStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>{mysqlStatus === 'running' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}</button>
                 </div>
               </div>
             )}
 
-            {/* --- UPDATED ADMINER CARD --- */}
-            <div className="flex items-center justify-between p-3 bg-orange-50 rounded-lg border border-orange-100">
-              <div className="flex items-center gap-3"><div className="p-2 bg-orange-200 text-orange-700 rounded"> <Server size={16} /> </div><div><div className="text-sm font-medium">Adminer</div><div className="text-[10px] text-slate-400">Port 9000</div></div></div>
-              <div className="flex gap-1">
-                {/* THEME BUTTON (Disabled while downloading) */}
-                <button
-                  onClick={handleAdminerTheme}
-                  disabled={isAdminerThemeDownloading}
-                  className={`p-1.5 rounded transition-colors ${isAdminerThemeDownloading ? 'text-orange-300' : 'text-orange-600 hover:bg-orange-200'}`}
-                  title="Change Theme"
-                >
-                  {isAdminerThemeDownloading ? <Loader2 size={14} className="animate-spin" /> : <Palette size={14} />}
-                </button>
-
-                {adminerStatus === 'running' && (
+            {isPostgresInstalled && (
+              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <div className="p-2 bg-blue-800 text-white rounded flex-shrink-0"><Database size={16} /></div>
+                  <div className="min-w-0"><div className="text-sm font-medium truncate">PostgreSQL</div><div className="text-[10px] text-slate-400">Port 5432</div></div>
+                </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  <button onClick={() => setShowPgConfig(true)} className="p-1 text-slate-400 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors" title="Configure Postgres Password"><Settings size={14} /></button>
                   <button
-                    onClick={() => invoke('open_in_browser', { url: 'http://127.0.0.1:9000/?server=localhost&username=root' })}
-                    className="p-1.5 text-orange-600 hover:bg-orange-200 rounded transition-colors"
-                    title="Open Adminer"
+                    onClick={() => handleOpenAdminer('postgres')}
+                    className="p-1 text-blue-800 hover:bg-blue-100 rounded transition-colors"
+                    title="Open Adminer (Postgres)"
                   >
                     <ExternalLink size={14} />
                   </button>
-                )}
-                <button onClick={toggleAdminer} className={`p-1.5 rounded transition-colors ${adminerStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>{adminerStatus === 'running' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}</button>
+
+                  <button onClick={togglePostgres} className={`p-1 rounded transition-colors ${postgresStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>
+                    {postgresStatus === 'running' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
+
+            {(isMariaDbInstalled || isPostgresInstalled) && (
+              <div className="flex items-center justify-between p-3 bg-orange-50 rounded-lg border border-orange-100">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-orange-200 text-orange-700 rounded"> <Server size={16} /> </div>
+                  <div><div className="text-sm font-medium">Adminer</div><div className="text-[10px] text-slate-400">Port 9000</div></div>
+                </div>
+                <div className="flex gap-1">
+                  <button onClick={handleAdminerTheme} disabled={isAdminerThemeDownloading} className={`p-1.5 rounded transition-colors ${isAdminerThemeDownloading ? 'text-orange-300' : 'text-orange-600 hover:bg-orange-200'}`} title="Change Theme">
+                    {isAdminerThemeDownloading ? <Loader2 size={14} className="animate-spin" /> : <Palette size={14} />}
+                  </button>
+                  <button onClick={toggleAdminer} className={`p-1.5 rounded transition-colors ${adminerStatus === 'running' ? 'text-red-500 hover:bg-red-100' : 'text-emerald-500 hover:bg-emerald-100'}`}>{adminerStatus === 'running' ? <Square size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}</button>
+                </div>
+              </div>
+            )}
+
           </div>
         ) : (
           <div className="mb-6 p-4 bg-amber-50 border border-amber-100 rounded-lg text-amber-800 text-xs">
@@ -731,7 +730,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ... (Rest of sidebar tools same as before) ... */}
         <div className="space-y-2 border-t border-slate-100 pt-4">
           <p className="text-xs text-slate-400 mb-2">Tools</p>
           <button onClick={() => setShowPhpManager(true)} className="w-full text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 p-2 rounded text-left flex items-center gap-2"><Settings size={14} /> Manage PHP Versions</button>
@@ -747,27 +745,70 @@ export default function App() {
             {isDownloadingPostgres ? 'Downloading...' : (isPostgresInstalled ? 'PostgreSQL Installed' : 'Get PostgreSQL 16')}
           </button>
         </div>
-        <div className="mt-auto space-y-2">
-          <button onClick={createLaravel} className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 py-2 px-4 rounded-lg text-sm font-medium border border-red-200">
-            <PlusCircle size={16} /> New Laravel App
+        <div className="mt-auto relative">
+          {showProjectMenu && (
+            <div className="absolute bottom-12 left-0 w-full bg-white border border-slate-200 shadow-xl rounded-xl overflow-hidden animate-in slide-in-from-bottom-2 fade-in duration-200 z-20">
+              <div className="p-1 space-y-0.5">
+                <button
+                  onClick={() => { createLaravel(); setShowProjectMenu(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-700 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors text-left"
+                >
+                  <div className="w-6 h-6 bg-red-100 text-red-600 rounded flex items-center justify-center font-bold text-[10px]">Lr</div>
+                  New Laravel App
+                </button>
+
+                <button
+                  onClick={() => { createSymfony(); setShowProjectMenu(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 hover:text-black rounded-lg transition-colors text-left"
+                >
+                  <div className="w-6 h-6 bg-black text-white rounded flex items-center justify-center font-bold text-[10px]">Sy</div>
+                  New Symfony App
+                </button>
+
+                <button
+                  onClick={() => { createWordpress(); setShowProjectMenu(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 rounded-lg transition-colors text-left"
+                >
+                  <div className="w-6 h-6 bg-blue-100 text-blue-600 rounded flex items-center justify-center font-bold text-[10px]">Wp</div>
+                  New WordPress App
+                </button>
+
+                <div className="h-px bg-slate-100 my-1"></div>
+
+                <button
+                  onClick={() => { addNewProject(); setShowProjectMenu(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 rounded-lg transition-colors text-left"
+                >
+                  <div className="w-6 h-6 bg-slate-200 text-slate-600 rounded flex items-center justify-center"><PlusCircle size={14} /></div>
+                  Import Existing
+                </button>
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={() => setShowProjectMenu(!showProjectMenu)}
+            className={`w-full flex items-center justify-between bg-slate-900 hover:bg-slate-800 text-white py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${showProjectMenu ? 'ring-2 ring-indigo-500 ring-offset-2' : ''}`}
+          >
+            <div className="flex items-center gap-2">
+              <PlusCircle size={18} />
+              <span>New / Import</span>
+            </div>
+            <ChevronUp size={16} className={`transition-transform duration-200 ${showProjectMenu ? 'rotate-180' : ''}`} />
           </button>
-          <button onClick={createSymfony} className="w-full flex items-center justify-center gap-2 bg-black hover:bg-gray-800 text-white py-2 px-4 rounded-lg text-sm font-medium border border-gray-900">
-            <PlusCircle size={16} /> New Symfony App
-          </button>
-          <button onClick={createWordpress} className="w-full flex items-center justify-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-600 py-2 px-4 rounded-lg text-sm font-medium border border-blue-200">
-            <PlusCircle size={16} /> New WordPress App
-          </button>
-          <button onClick={addNewProject} className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white py-2 px-4 rounded-lg text-sm font-medium">
-            <PlusCircle size={16} /> Import Project
-          </button>
+
+          {showProjectMenu && (
+            <div
+              className="fixed inset-0 z-10"
+              onClick={() => setShowProjectMenu(false)}
+            ></div>
+          )}
         </div>
       </div>
 
       <div className="flex-1 p-8">
-        {/* ... (Header and Project List same as before) ... */}
         <header className="flex justify-between mb-8 items-center">
           <h2 className="text-2xl font-bold text-slate-700">My Projects</h2>
-          {!isAdmin && isAdmin !== null && (<div className="bg-amber-100 border border-amber-200 text-amber-800 px-4 py-2 rounded-lg flex items-center gap-3 text-sm"><ShieldAlert size={18} /><span>Restart as <strong>Administrator</strong> to enable Custom Domains (.test)</span></div>)}
         </header>
 
         <div className="bg-white rounded-xl shadow-sm border border-slate-200">
@@ -819,7 +860,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* ... (Keep all modals: Details, PHP Manager, Installer, DB Config, Delete) ... */}
       {isDetailsOpen && selectedProject && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
@@ -1027,6 +1067,28 @@ export default function App() {
                   })}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPgConfig && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-10 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-xl shadow-2xl border border-slate-200">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><Settings size={20} /> PostgreSQL Setup</h3>
+              <button onClick={() => setShowPgConfig(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">PostgreSQL must be <strong>running</strong> to set the password.</div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">New Password</label>
+                <div className="relative">
+                  <input type="password" placeholder="Enter new password" className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-10 pr-4 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" value={pgNewPass} onChange={(e) => setPgNewPass(e.target.value)} />
+                  <KeyRound size={16} className="absolute left-3 top-2.5 text-slate-400" />
+                </div>
+              </div>
+              <button onClick={handleUpdatePgPassword} className="w-full py-2 bg-blue-800 hover:bg-blue-900 text-white font-bold rounded-lg transition">Set Password</button>
             </div>
           </div>
         </div>

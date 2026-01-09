@@ -27,7 +27,6 @@ async fn handle_request(
     req: Request<hyper::body::Incoming>,
     state: Arc<ProxyState>, 
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    // 1. Capture the original host
     let host_header = req.headers().get("host")
         .and_then(|h| h.to_str().ok())
         .unwrap_or_default()
@@ -64,7 +63,6 @@ async fn handle_request(
             }
         });
 
-        // 2. Build Upstream Request
         let mut builder = Request::builder()
             .method(req_parts.method)
             .uri(req_parts.uri);
@@ -73,10 +71,8 @@ async fn handle_request(
             builder = builder.header(key, value);
         }
 
-        // Explicitly set Host header
         builder = builder.header("Host", &host_header);
 
-        // --- FIX: Send the collected bytes ---
         let upstream_req = builder
             .body(Full::new(req_bytes)) 
             .unwrap();

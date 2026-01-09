@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::env;
 use tauri::command;
 
-// Helper to find the path: ~/.stackmanager/projects.json
 fn get_store_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     let home = env::var("USERPROFILE").ok().map(PathBuf::from)?;
@@ -25,7 +24,6 @@ pub fn load_projects() -> Result<String, String> {
     let path = get_store_path().ok_or("Could not find home directory")?;
     
     if !path.exists() {
-        // Return empty array if file doesn't exist yet
         return Ok("[]".to_string());
     }
 

@@ -210,7 +210,6 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
     let dir = PathBuf::from(&bin_path_dir);
     let ini_path = dir.join("php.ini");
     
-    // 1. Create php.ini if missing
     if !ini_path.exists() {
         let dev_ini = dir.join("php.ini-development");
         let prod_ini = dir.join("php.ini-production");
@@ -224,7 +223,6 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
         }
     }
 
-    // 2. Patch php.ini
     let content = fs::read_to_string(&ini_path).map_err(|e| e.to_string())?;
     let mut new_lines = Vec::new();
     let mut modified = false;
@@ -232,7 +230,6 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
     for line in content.lines() {
         let trimmed = line.trim();
         
-        // ENABLE EXTENSIONS (Added intl)
         if trimmed.starts_with(";extension=curl") || 
            trimmed.starts_with(";extension=fileinfo") || 
            trimmed.starts_with(";extension=mbstring") || 
@@ -240,8 +237,10 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
            trimmed.starts_with(";extension=pdo_mysql") || 
            trimmed.starts_with(";extension=mysqli") ||
            trimmed.starts_with(";extension=gd") ||
-           trimmed.starts_with(";extension=intl") || // <--- ADDED THIS
-           trimmed.starts_with(";extension=zip") {
+           trimmed.starts_with(";extension=intl") || 
+           trimmed.starts_with(";extension=zip") ||
+           trimmed.starts_with(";extension=pdo_pgsql") || 
+           trimmed.starts_with(";extension=pgsql") {
             
             new_lines.push(trimmed.replacen(";", "", 1));
             modified = true;
@@ -250,7 +249,6 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
              new_lines.push("extension_dir = \"ext\"".to_string());
              modified = true;
         }
-        // RESOURCE LIMITS
         else if trimmed.starts_with("post_max_size =") {
             new_lines.push("post_max_size = 64M".to_string());
             modified = true;
@@ -270,11 +268,12 @@ pub fn prepare_php_ini(bin_path_dir: String) -> Result<String, String> {
 
     if modified {
         fs::write(&ini_path, new_lines.join("\n")).map_err(|e| e.to_string())?;
-        Ok("Configured php.ini with Laravel extensions".to_string())
+        Ok("Configured php.ini with Laravel & Postgres extensions".to_string())
     } else {
         Ok("php.ini already configured".to_string())
     }
 }
+
 #[tauri::command]
 pub fn patch_vite_config(project_path: String) -> Result<String, String> {
     let path = PathBuf::from(&project_path);

@@ -8,7 +8,6 @@ use std::io::{BufRead, BufReader, Write};
 use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
 
-// Helper to get paths
 fn get_paths() -> Option<(PathBuf, PathBuf)> {
     #[cfg(target_os = "windows")]
     let home = env::var("USERPROFILE").ok().map(PathBuf::from)?;
@@ -40,14 +39,12 @@ fn ensure_php_extensions(php_dir: &PathBuf) -> Result<(), String> {
     for line in content.lines() {
         let trimmed = line.trim();
         
-        // 1. Enable Extension Dir
         if trimmed.contains(";extension_dir = \"ext\"") {
              new_lines.push("extension_dir = \"ext\"".to_string());
              modified = true;
              continue;
         }
 
-        // 2. Enable Extensions (Smarter Check)
         if trimmed.starts_with(";") && (
            trimmed.contains("extension=openssl") || 
            trimmed.contains("extension=mbstring") || 
@@ -57,7 +54,6 @@ fn ensure_php_extensions(php_dir: &PathBuf) -> Result<(), String> {
            trimmed.contains("extension=mysqli") ||
            trimmed.contains("extension=zip") 
         ) {
-            // Remove the first char (semicolon)
             new_lines.push(trimmed[1..].to_string());
             modified = true;
             continue;
@@ -88,7 +84,6 @@ pub async fn init_composer() -> Result<String, String> {
         return Ok("Composer ready.".to_string());
     }
 
-    // Download logic...
     let url = "https://getcomposer.org/download/latest-stable/composer.phar";
     let client = Client::new();
     let res = client.get(url).send().await.map_err(|e| e.to_string())?;
@@ -122,7 +117,6 @@ pub async fn create_laravel_project(
 
     if !composer_phar.exists() { return Err("Composer missing".to_string()); }
 
-    // Prepare Command
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
         c.args(&["/C", &php_exe.to_string_lossy(), &composer_phar.to_string_lossy(), "create-project", "laravel/laravel", &project_name, "--prefer-dist"]);
@@ -137,13 +131,11 @@ pub async fn create_laravel_project(
        .stdout(Stdio::piped())
        .stderr(Stdio::piped());
 
-    // Spawn (This is non-blocking for the OS)
     let mut child = cmd.spawn().map_err(|e| format!("Failed to start composer: {}", e))?;
 
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
     let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
 
-    // Thread for STDOUT
     let app_handle = app.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -154,7 +146,6 @@ pub async fn create_laravel_project(
         }
     });
 
-    // Thread for STDERR (Composer uses this for progress bars)
     let app_handle_err = app.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
@@ -165,7 +156,6 @@ pub async fn create_laravel_project(
         }
     });
 
-    // Wait for finish (Since function is async, Tauri runs this off main thread)
     let status = tauri::async_runtime::spawn_blocking(move || {
         child.wait()
     }).await.map_err(|e| e.to_string())?
@@ -248,7 +238,6 @@ pub async fn create_symfony_project(
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("cmd");
-        // Symfony Skeleton is the standard starting point
         c.args(&["/C", &php_exe.to_string_lossy(), &composer_phar.to_string_lossy(), "create-project", "symfony/skeleton", &project_name, "--prefer-dist"]);
         c
     } else {
@@ -257,9 +246,7 @@ pub async fn create_symfony_project(
         c
     };
 
-    cmd.current_dir(&parent_folder)
-       .stdout(Stdio::piped())
-       .stderr(Stdio::piped());
+    cmd.current_dir(&parent_folder).stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to start composer: {}", e))?;
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
@@ -268,22 +255,16 @@ pub async fn create_symfony_project(
     let app_handle = app.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(l) = line { let _ = app_handle.emit("composer-progress", l); }
-        }
+        for line in reader.lines() { if let Ok(l) = line { let _ = app_handle.emit("composer-progress", l); } }
     });
 
     let app_handle_err = app.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(l) = line { let _ = app_handle_err.emit("composer-progress", l); }
-        }
+        for line in reader.lines() { if let Ok(l) = line { let _ = app_handle_err.emit("composer-progress", l); } }
     });
 
-    let status = tauri::async_runtime::spawn_blocking(move || child.wait()).await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    let status = tauri::async_runtime::spawn_blocking(move || child.wait()).await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
 
     if status.success() {
         let path = std::path::Path::new(&parent_folder).join(&project_name);
